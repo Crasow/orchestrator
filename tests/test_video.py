@@ -3,7 +3,6 @@ import asyncio
 import base64
 import os
 import time
-from datetime import datetime
 
 # --- КОНФИГУРАЦИЯ ---
 PROXY_URL = "http://localhost:8000"
@@ -88,7 +87,7 @@ async def test_video_generation():
                         process_result(data_poll)
                     else:
                         # 200 OK, но еще не готово — это хороший знак
-                        print(f".", end="", flush=True)
+                        print(".", end="", flush=True)
                 else:
                     # Если мы здесь, значит Оркестратор отправил нас не на тот проект
                     print(f"[ERR:{resp_poll.status_code}]", end="", flush=True)
