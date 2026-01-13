@@ -3,6 +3,7 @@ import glob
 import json
 import time
 import random
+import asyncio
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from google.oauth2 import service_account
@@ -63,9 +64,9 @@ class CredentialRotator:
         self._current_index = (self._current_index + 1) % len(self._pool)
         return cred
 
-    def get_token_for_credential(self, cred_wrapper: VertexCredential) -> str:
+    async def get_token_for_credential_async(self, cred_wrapper: VertexCredential) -> str:
         """Получает валидный Access Token (обновляет если протух)."""
         creds = cred_wrapper.creds
         if not creds.valid:
-            creds.refresh(Request())
+            await asyncio.to_thread(creds.refresh, Request())
         return creds.token
