@@ -55,7 +55,7 @@ async def proxy_request(request: Request, path: str):
 
         try:
             # 4. Получаем актуальный Bearer токен
-            token = rotator.get_token_for_credential(cred_wrapper)
+            token = await rotator.get_token_for_credential_async(cred_wrapper)
         except Exception as e:
             print(f"[WARN] Token refresh failed for {cred_wrapper.project_id}: {e}")
             continue
