@@ -3,15 +3,27 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from rotator import CredentialRotator
-from random import randint
+from typing import Optional
+from contextlib import asynccontextmanager
 
 # Конфигурация
 UPSTREAM_BASE = "https://us-central1-aiplatform.googleapis.com"
 CREDS_DIR = "./credentials"
 
-app = FastAPI()
 rotator = CredentialRotator(CREDS_DIR)
-client = httpx.AsyncClient(timeout=120.0)  # Таймаут побольше для видео
+
+client: httpx.AsyncClient = None
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global client
+    client = httpx.AsyncClient(timeout=120.0)
+    print("[INIT] HTTP Client started")
+    yield
+    await client.aclose()
+    print("[SHUTDOWN] HTTP Client closed")
+    
+app = FastAPI(lifespan=lifespan)
+
 
 MAX_RETRIES = len(rotator._pool) # Сколько ключей перебрать, прежде чем сдаться
 
