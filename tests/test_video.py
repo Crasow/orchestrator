@@ -8,7 +8,6 @@ from datetime import datetime
 # --- КОНФИГУРАЦИЯ ---
 PROXY_URL = "http://localhost:8000"
 FAKE_PROJECT_ID = "test-video-project"
-# Используем модель Veo из providers.yaml
 MODEL = "publishers/google/models/veo-3.0-generate-001"
 
 # Эндпоинты
@@ -32,7 +31,7 @@ async def test_video_generation():
         ],
         "parameters": {
             "sampleCount": 1,
-            "durationSeconds": 6,  # Veo поддерживает 4, 6, 8 сек
+            "durationSeconds": 6,
             "aspectRatio": "16:9",
         },
     }
@@ -49,7 +48,6 @@ async def test_video_generation():
                 return
 
             data_start = resp_start.json()
-            # Получаем имя операции (напр. projects/123/locations/.../operations/999)
             operation_name = data_start.get("name")
             print(f"[INFO] Операция создана: {operation_name}")
 
@@ -62,77 +60,64 @@ async def test_video_generation():
             return
 
         # 2. Поллинг (ожидание готовности)
-        print("\n[POLL] Начинаем ожидание готовности видео...")
+        print("\n[POLL] Начинаем ожидание...")
         print(
-            "[NOTE] Из-за ротации ключей будут ошибки 404/403/400. Это нормально, ждем совпадения ключа."
+            "[CHECK] Если Sticky Sessions работают, вы должны видеть только точки (.)."
         )
+        print("        Если появляются 'x' или коды ошибок — роутинг сбоит.\n")
 
         done = False
         attempts = 0
 
-        while not done and attempts < 60:  # Ждем максимум ~5 минут
+        while (
+            not done and attempts < 120
+        ):  # Ждем до 10 минут (видео может генериться долго)
             attempts += 1
-            await asyncio.sleep(5)  # Пауза между запросами
+            await asyncio.sleep(5)
 
             try:
-                # Отправляем fetchPredictOperation
-                # Важно: operationName передается в теле запроса
                 payload_fetch = {"operationName": operation_name}
-
                 resp_poll = await client.post(URL_FETCH, json=payload_fetch)
 
                 if resp_poll.status_code == 200:
                     data_poll = resp_poll.json()
-
-                    # Проверяем флаг done
                     done = data_poll.get("done", False)
 
                     if done:
                         print(f"\n[DONE] Генерация завершена! (Попытка {attempts})")
                         process_result(data_poll)
                     else:
-                        print(
-                            f".", end="", flush=True
-                        )  # Просто точка, если всё ок, но еще не готово
+                        # 200 OK, но еще не готово — это хороший знак
+                        print(f".", end="", flush=True)
                 else:
-                    # Если попали не на тот ключ, скорее всего будет 404 или 403
-                    # Мы просто игнорируем и пробуем снова
-                    print(f"x", end="", flush=True)
+                    # Если мы здесь, значит Оркестратор отправил нас не на тот проект
+                    print(f"[ERR:{resp_poll.status_code}]", end="", flush=True)
 
             except Exception as e:
-                print(f"!", end="", flush=True)
+                print(f"![{e}]", end="", flush=True)
 
     if not done:
         print("\n[TIMEOUT] Видео не сгенерировалось за отведенное время.")
 
 
 def process_result(data):
-    # Ответ может быть обернут в "response"
-    response_block = data.get(
-        "response", data
-    )  # Иногда Veo кладет результат внутрь "response"
-
-    # Veo может вернуть "videos" или "predictions"
-    # См. логику _extract_video_media в google_client.py
+    response_block = data.get("response", data)
     videos = response_block.get("videos", [])
     if not videos and "predictions" in response_block:
         videos = response_block["predictions"]
 
     if not videos:
         print("\n[WARN] Операция завершена, но видео нет в ответе.")
-        print("Raw:", data)
         return
 
     for i, vid in enumerate(videos):
-        # Veo иногда возвращает video/mp4 в "bytesBase64Encoded" или просто "data"
         b64 = vid.get("bytesBase64Encoded") or vid.get("data")
-
-        # Если пришел inlineData (как в _collect_video_items)
         if not b64 and "inlineData" in vid:
             b64 = vid["inlineData"].get("data")
 
         if b64:
-            file_path = f"{OUTPUT_FOLDER}/video_{int(time.time())}_{i}.mp4"
+            timestamp = int(time.time())
+            file_path = f"{OUTPUT_FOLDER}/video_{timestamp}_{i}.mp4"
             with open(file_path, "wb") as f:
                 f.write(base64.b64decode(b64))
             print(f"\n[SUCCESS] Видео сохранено: {file_path}")
