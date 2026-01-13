@@ -1,0 +1,27 @@
+# --- Security ---
+credentials/
+.env
+.env.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+
+# --- IDE Settings  ---
+.idea/
+.vscode/
+*.swp
+
+# --- Test Artifacts ---
+test_results/
+test_results_video/
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db

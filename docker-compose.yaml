@@ -1,0 +1,10 @@
+services:
+  orchestrator:
+    build: .
+    container_name: vertex_orchestrator
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount credentials at runtime
+      - ./credentials:/app/credentials
