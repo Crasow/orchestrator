@@ -97,10 +97,6 @@ async def proxy_request(request: Request, path: str):
             )
             rp_resp = await client.send(rp_req, stream=True)
             
-            #TODO: Remove this after testing
-            rand_int = randint(0, 10)
-            if rand_int == 0:
-                rp_resp.status_code = 429
 
             # 7. Проверка статуса
             # 429 - Too Many Requests (Quota limit)
