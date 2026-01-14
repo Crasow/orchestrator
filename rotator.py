@@ -3,10 +3,14 @@ import glob
 import json
 import asyncio
 import random
+import logging 
 from dataclasses import dataclass
 from typing import List, Optional
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,7 +43,8 @@ class CredentialRotator:
 
                 project_id = info.get("project_id")
                 if not project_id:
-                    print(f"[WARN] No project_id in {fpath}, skipping")
+                    # Заменено print -> logger.warning
+                    logger.warning(f"No project_id in {fpath}, skipping")
                     continue
                 # Scopes обязательны для Vertex AI
                 scopes = ["https://www.googleapis.com/auth/cloud-platform"]
@@ -54,9 +59,11 @@ class CredentialRotator:
                 self._pool.append(credential)
                 self._pool_map[project_id] = credential  # Сохраняем в мапу
 
-                print(f"[INFO] Loaded credential for project: {project_id}")
+                # Заменено print -> logger.info
+                logger.info(f"Loaded credential for project: {project_id}")
             except Exception as e:
-                print(f"[ERROR] Failed to load {fpath}: {e}")
+                # Заменено print -> logger.error
+                logger.error(f"Failed to load {fpath}: {e}")
 
         if not self._pool:
             raise RuntimeError("No valid credentials loaded")

@@ -20,7 +20,12 @@ else:
 MAX_RETRIES = 10
 
 # --- ЛОГИРОВАНИЕ ---
-logging.basicConfig(level=logging.INFO)
+# Обновлена конфигурация: добавлен формат
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 logger = logging.getLogger("orchestrator")
 
 # --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
@@ -160,14 +165,16 @@ async def proxy_request(request: Request, path: str):
                 content=body,
                 params=params,
             )
-            
+
             rp_resp = await client.send(rp_req, stream=True)
 
             # 7. Проверка статуса
             # 429 - Too Many Requests (Quota limit)
             # 402 - Payment Required (Quota limit / Billing issue)
             if rp_resp.status_code in [429, 402]:
-                logger.warning(f"[QUOTA] {cred_wrapper.project_id} exhausted ({rp_resp.status_code}). Switching...")
+                logger.warning(
+                    f"[QUOTA] {cred_wrapper.project_id} exhausted ({rp_resp.status_code}). Switching..."
+                )
                 await rp_resp.aclose()  # Закрываем соединение перед следующей попыткой
                 # Если это был LRO-запрос к конкретному проекту, мы не можем "свитчнуться",
                 # так как операция живет только там. Придется отдать ошибку клиенту.
@@ -176,7 +183,7 @@ async def proxy_request(request: Request, path: str):
                         content="Operation host quota exhausted", status_code=429
                     )
                 continue
-            
+
             # --- LRO LOGIC (Caching) ---
             # Если это успешный запуск LRO (:predictLongRunning), запоминаем, где он запустился
             if "predictLongRunning" in path and rp_resp.status_code == 200:
@@ -211,7 +218,7 @@ async def proxy_request(request: Request, path: str):
                         )
                     },
                 )
-                
+
             # Если успех (200) или ошибка клиента (400) или сервера (500) - возвращаем как есть
             # (Ретрай 500-х ошибок - спорный момент, обычно проксируем)
             return StreamingResponse(
