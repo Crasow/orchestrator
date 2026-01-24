@@ -19,6 +19,8 @@ else:
 
 MAX_RETRIES = 10
 
+ADMIN_SECRET = "super-secret-key-123"  # TODO: вынести в env
+
 # --- ЛОГИРОВАНИЕ ---
 # Обновлена конфигурация: добавлен формат
 logging.basicConfig(
@@ -240,6 +242,20 @@ async def proxy_request(request: Request, path: str):
     return Response(
         content="All backend pools exhausted or unavailable", status_code=503
     )
+
+
+@app.post("/admin/reload")
+async def reload_keys(request: Request):
+    token = request.headers.get("X-Admin-Token")
+    if token != ADMIN_SECRET:
+        return Response(status_code=403)
+
+    try:
+        rotator.reload_credentials(CREDS_DIR)
+        return {"status": "ok", "count": len(rotator._pool)}
+    except Exception as e:
+        logger.error(f"Reload error: {e}")
+        return Response(content=f"Error: {e}", status_code=500)
 
 
 if __name__ == "__main__":
