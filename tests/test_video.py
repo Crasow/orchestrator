@@ -5,7 +5,8 @@ import os
 import time
 
 # --- КОНФИГУРАЦИЯ ---
-PROXY_URL = "http://localhost:8000"
+# PROXY_URL = "http://localhost:8000"
+PROXY_URL = "https://nonsatirical-callan-closer.ngrok-free.dev"
 FAKE_PROJECT_ID = "test-video-project"
 MODEL = "publishers/google/models/veo-3.0-generate-001"
 

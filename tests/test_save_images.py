@@ -5,7 +5,8 @@ import os
 from datetime import datetime
 
 # --- КОНФИГУРАЦИЯ ---
-PROXY_URL = "http://localhost:8000"
+# PROXY_URL = "http://localhost:8000"
+PROXY_URL = "https://nonsatirical-callan-closer.ngrok-free.dev"
 # ID проекта может быть любым, прокси его заменит на реальный
 FAKE_PROJECT_ID = "test-project-id"
 # Модель для теста (Imagen 3)
