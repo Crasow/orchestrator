@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 FAKE_PROJECT_ID = "integration-test-project"
 LOCATION = "us-central1"
 TIMEOUT = 60.0
-RESULTS_DIR = "integration_results"
+RESULTS_DIR = "tests/integration_results"
 
 # Models to test (based on old_tests/test_all_models.py)
 TEXT_MODELS = [
