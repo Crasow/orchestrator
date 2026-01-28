@@ -1,6 +1,14 @@
 # .dockerignore
 .venv
 credentials
+secrets
+integration_results
+htmlcov
+coverage.xml
+tests
+old_tests
 __pycache__
 *.pyc
 .git
+.pytest_cache
+.ruff_cache
