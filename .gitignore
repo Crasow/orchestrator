@@ -1,5 +1,6 @@
 # --- Security ---
 credentials/
+secrets/
 .env
 .env.*
 
@@ -18,9 +19,19 @@ env/
 .vscode/
 *.swp
 
-# --- Test Artifacts ---
+# --- Build & Dist ---
+build/
+dist/
+*.egg-info/
+
+# --- Test & Quality Artifacts ---
 test_results/
 test_results_video/
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
 
 # --- OS Files ---
 .DS_Store
