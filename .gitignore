@@ -33,6 +33,9 @@ htmlcov/
 .pytest_cache/
 .ruff_cache/
 
+integration_results/
+old_tests
+
 # --- OS Files ---
 .DS_Store
 Thumbs.db
