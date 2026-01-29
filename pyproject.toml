@@ -20,6 +20,7 @@ dependencies = [
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra --strict-markers --strict-config --cov=app --cov-report=term-missing --cov-report=html --cov-report=xml"
+pythonpath = "."
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
