@@ -27,7 +27,8 @@ gemini_rotator = GeminiRotator()
 http_client: httpx.AsyncClient = None  # type: ignore
 
 # Регулярка для подмены Project ID в Vertex
-PROJECT_PATH_REGEX = re.compile(r"(v1/projects/)([^/]+)(/locations.*)")
+# Поддерживает v1, v1beta1, v2 и т.д.
+PROJECT_PATH_REGEX = re.compile(r"(v1(?:beta\d+)?/projects/)([^/]+)(/locations.*)")
 
 
 @asynccontextmanager
@@ -136,9 +137,9 @@ async def proxy_gateway(request: Request, path: str):
         )
 
     # 1. Определяем провайдера по URL
-    # Gemini Studio обычно содержит /models/gemini... и НЕ содержит /projects/
-    # Либо явно путь /v1beta/
-    is_gemini = "v1beta" in path or ("models/" in path and "projects/" not in path)
+    # Vertex AI всегда содержит '/projects/' в пути.
+    # Gemini API обычно выглядит как /v1beta/models/... или /v1/models/...
+    is_gemini = "projects/" not in path
 
     body = await request.body()
 

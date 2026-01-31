@@ -60,11 +60,11 @@ async def client():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
             yield ac
 
-def create_image_b64(color="red", size=(512, 512), mode="RGB"):
+def create_image_b64(color="red", size=(512, 512)):
     """Creates a base64 encoded image of a given color."""
     try:
         from PIL import Image
-        img = Image.new(mode, size, color=color)
+        img = Image.new("RGB", size, color=color)
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -126,14 +126,12 @@ async def test_image_generation(client, model_id):
     assert len(data["predictions"]) > 0
     
     first_pred = data["predictions"][0]
-    b64 = first_pred.get("bytesBase64Encoded") or first_pred.get("data")
-    if b64 is None:
-        logger.warning(f"No image data in prediction for {model_id}, likely filtered or empty.")
-        return
-
+    b64_data = first_pred.get("bytesBase64Encoded") or first_pred.get("data")
+    assert b64_data is not None, f"No image data in prediction for {model_id}"
+    
     filename = f"{RESULTS_DIR}/image_{model_id.replace('/', '_').split('_models_')[-1]}.png"
     with open(filename, "wb") as f:
-        f.write(base64.b64decode(b64))
+        f.write(base64.b64decode(b64_data))
     logger.info(f"Saved image to {filename}")
 
 @pytest.mark.asyncio
@@ -199,120 +197,115 @@ async def test_video_generation(client, model_id):
 async def test_capability_comprehensive(client, model_id):
     """Verifies all capability modes for imagen-3.0-capability-001."""
     
-    raw_img = create_image_b64("red", mode="RGB")
-    mask_img = create_image_b64("white", mode="L") # Grayscale mask
-    style_img = create_image_b64("blue", mode="RGB")
-    subject_img = create_image_b64("green", mode="RGB")
-    control_img = create_image_b64("yellow", mode="RGB")
+    raw_img = create_image_b64("red")
+    mask_img = create_image_b64("white") # Simple full-mask
+    style_img = create_image_b64("blue")
+    subject_img = create_image_b64("green")
+    control_img = create_image_b64("yellow")
     
     scenarios = [
         {
             "name": "shortcut_attachments",
             "instance": {
-                "prompt": "Make it vintage",
+                "prompt": "A futuristic red car",
+                "image": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}
+            },
+            "parameters": {"sampleCount": 1}
+        },
+        {
+            "name": "edit_inpaint_insertion",
+            "instance": {
+                "prompt": "Add a blue sun [1]",
                 "referenceImages": [
-                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}}
+                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
+                    {"referenceId": 2, "referenceType": "REFERENCE_TYPE_MASK", "referenceImage": {"bytesBase64Encoded": mask_img, "mimeType": "image/png"}}
+                ]
+            },
+            "parameters": {"sampleCount": 1, "editMode": "EDIT_MODE_INPAINT_INSERTION"}
+        },
+        {
+            "name": "edit_inpaint_removal",
+            "instance": {
+                "prompt": "Remove the objects [1]",
+                "referenceImages": [
+                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
+                    {"referenceId": 2, "referenceType": "REFERENCE_TYPE_MASK", "referenceImage": {"bytesBase64Encoded": mask_img, "mimeType": "image/png"}}
+                ]
+            },
+            "parameters": {"sampleCount": 1, "editMode": "EDIT_MODE_INPAINT_REMOVAL"}
+        },
+        {
+            "name": "edit_outpaint",
+            "instance": {
+                "prompt": "Extend the landscape [1]",
+                "referenceImages": [
+                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
+                    {"referenceId": 2, "referenceType": "REFERENCE_TYPE_MASK", "referenceImage": {"bytesBase64Encoded": mask_img, "mimeType": "image/png"}}
+                ]
+            },
+            "parameters": {"sampleCount": 1, "editMode": "EDIT_MODE_OUTPAINT"}
+        },
+        {
+            "name": "edit_background_swap",
+            "instance": {
+                "prompt": "Change background to a beach [1]",
+                "referenceImages": [
+                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
+                    {"referenceId": 2, "referenceType": "REFERENCE_TYPE_MASK", "referenceImage": {"bytesBase64Encoded": mask_img, "mimeType": "image/png"}}
+                ]
+            },
+            "parameters": {"sampleCount": 1, "editMode": "EDIT_MODE_BACKGROUND_SWAP"}
+        },
+        {
+            "name": "ref_raw_style",
+            "instance": {
+                "prompt": "A cat in the style of [2] [1]",
+                "referenceImages": [
+                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
+                    {"referenceId": 2, "referenceType": "REFERENCE_TYPE_STYLE", "referenceImage": {"bytesBase64Encoded": style_img, "mimeType": "image/png"}, "styleDescription": "Van Gogh painting style"}
                 ]
             },
             "parameters": {"sampleCount": 1}
         },
-        # TODO: The following scenarios fail with INVALID_ARGUMENT. Requires further investigation into mask format or payload structure.
-        # {
-        #     "name": "edit_inpaint_insertion",
-        #     "instance": {
-        #         "prompt": "Add a blue sun [1]",
-        #         "referenceImages": [
-        #             {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
-        #             {"referenceId": 2, "referenceType": "REFERENCE_TYPE_MASK", "referenceImage": {"bytesBase64Encoded": mask_img, "mimeType": "image/png"}}
-        #         ]
-        #     },
-        #     "parameters": {"sampleCount": 1, "editMode": "EDIT_MODE_INPAINT_INSERTION", "maskMode": "MASK_MODE_USER_PROVIDED"}
-        # },
-        # {
-        #     "name": "edit_inpaint_removal",
-        #     "instance": {
-        #         "prompt": "Remove the objects [1]",
-        #         "referenceImages": [
-        #             {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
-        #             {"referenceId": 2, "referenceType": "REFERENCE_TYPE_MASK", "referenceImage": {"bytesBase64Encoded": mask_img, "mimeType": "image/png"}}
-        #         ]
-        #     },
-        #     "parameters": {"sampleCount": 1, "editMode": "EDIT_MODE_INPAINT_REMOVAL", "maskMode": "MASK_MODE_USER_PROVIDED"}
-        # },
-        # {
-        #     "name": "edit_outpaint",
-        #     "instance": {
-        #         "prompt": "Extend the landscape [1]",
-        #         "referenceImages": [
-        #             {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
-        #             {"referenceId": 2, "referenceType": "REFERENCE_TYPE_MASK", "referenceImage": {"bytesBase64Encoded": mask_img, "mimeType": "image/png"}}
-        #         ]
-        #     },
-        #     "parameters": {"sampleCount": 1, "editMode": "EDIT_MODE_OUTPAINT", "maskMode": "MASK_MODE_USER_PROVIDED"}
-        # },
-        # {
-        #     "name": "edit_background_swap",
-        #     "instance": {
-        #         "prompt": "Change background to a beach [1]",
-        #         "referenceImages": [
-        #             {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
-        #             {"referenceId": 2, "referenceType": "REFERENCE_TYPE_MASK", "referenceImage": {"bytesBase64Encoded": mask_img, "mimeType": "image/png"}}
-        #         ]
-        #     },
-        #     "parameters": {"sampleCount": 1, "editMode": "EDIT_MODE_BACKGROUND_SWAP", "maskMode": "MASK_MODE_USER_PROVIDED"}
-        # },
-        # {
-        #     "name": "ref_raw_style",
-        #     "instance": {
-        #         "prompt": "A cat in the style of [2] [1]",
-        #         "referenceImages": [
-        #             {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
-        #             {"referenceId": 2, "referenceType": "REFERENCE_TYPE_STYLE", "referenceImage": {"bytesBase64Encoded": style_img, "mimeType": "image/png"}, "styleDescription": "Van Gogh painting style"}
-        #         ]
-        #     },
-        #     "parameters": {"sampleCount": 1}
-        # },
-        # {
-        #     "name": "ref_raw_subject",
-        #     "instance": {
-        #         "prompt": "A photo of [2] in Paris [1]",
-        #         "referenceImages": [
-        #             {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
-        #             {"referenceId": 2, "referenceType": "REFERENCE_TYPE_SUBJECT", "referenceImage": {"bytesBase64Encoded": subject_img, "mimeType": "image/png"}}
-        #         ]
-        #     },
-        #     "parameters": {"sampleCount": 1}
-        # },
-        # {
-        #     "name": "ref_raw_control",
-        #     "instance": {
-        #         "prompt": "A modern building [1]",
-        #         "referenceImages": [
-        #             {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
-        #             {"referenceId": 2, "referenceType": "REFERENCE_TYPE_CONTROL", "referenceImage": {"bytesBase64Encoded": control_img, "mimeType": "image/png"}, "controlType": "CONTROL_TYPE_CANNY"}
-        #         ]
-        #     },
-        #     "parameters": {"sampleCount": 1}
-        # },
-        # {
-        #     "name": "ref_all_4",
-        #     "instance": {
-        #         "prompt": "The subject [2] in style [3] following structure [4] [1]",
-        #         "referenceImages": [
-        #             {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
-        #             {"referenceId": 2, "referenceType": "REFERENCE_TYPE_SUBJECT", "referenceImage": {"bytesBase64Encoded": subject_img, "mimeType": "image/png"}},
-        #             {"referenceId": 3, "referenceType": "REFERENCE_TYPE_STYLE", "referenceImage": {"bytesBase64Encoded": style_img, "mimeType": "image/png"}, "styleDescription": "cyberpunk digital art"},
-        #             {"referenceId": 4, "referenceType": "REFERENCE_TYPE_CONTROL", "referenceImage": {"bytesBase64Encoded": control_img, "mimeType": "image/png"}, "controlType": "CONTROL_TYPE_CANNY"}
-        #         ]
-        #     },
-        #     "parameters": {"sampleCount": 1}
-        # }
+        {
+            "name": "ref_raw_subject",
+            "instance": {
+                "prompt": "A photo of [2] in Paris [1]",
+                "referenceImages": [
+                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
+                    {"referenceId": 2, "referenceType": "REFERENCE_TYPE_SUBJECT", "referenceImage": {"bytesBase64Encoded": subject_img, "mimeType": "image/png"}}
+                ]
+            },
+            "parameters": {"sampleCount": 1}
+        },
+        {
+            "name": "ref_raw_control",
+            "instance": {
+                "prompt": "A modern building [1]",
+                "referenceImages": [
+                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
+                    {"referenceId": 2, "referenceType": "REFERENCE_TYPE_CONTROL", "referenceImage": {"bytesBase64Encoded": control_img, "mimeType": "image/png"}, "controlType": "CONTROL_TYPE_CANNY"}
+                ]
+            },
+            "parameters": {"sampleCount": 1}
+        },
+        {
+            "name": "ref_all_4",
+            "instance": {
+                "prompt": "The subject [2] in style [3] following structure [4] [1]",
+                "referenceImages": [
+                    {"referenceId": 1, "referenceType": "REFERENCE_TYPE_RAW", "referenceImage": {"bytesBase64Encoded": raw_img, "mimeType": "image/png"}},
+                    {"referenceId": 2, "referenceType": "REFERENCE_TYPE_SUBJECT", "referenceImage": {"bytesBase64Encoded": subject_img, "mimeType": "image/png"}},
+                    {"referenceId": 3, "referenceType": "REFERENCE_TYPE_STYLE", "referenceImage": {"bytesBase64Encoded": style_img, "mimeType": "image/png"}, "styleDescription": "cyberpunk digital art"},
+                    {"referenceId": 4, "referenceType": "REFERENCE_TYPE_CONTROL", "referenceImage": {"bytesBase64Encoded": control_img, "mimeType": "image/png"}, "controlType": "CONTROL_TYPE_CANNY"}
+                ]
+            },
+            "parameters": {"sampleCount": 1}
+        }
     ]
     
     url = f"/v1/projects/{FAKE_PROJECT_ID}/locations/{LOCATION}/{model_id}:predict"
     
-    failures = []
-
     for scenario in scenarios:
         logger.info(f"Running capability scenario: {scenario['name']}")
         payload = {
@@ -322,36 +315,21 @@ async def test_capability_comprehensive(client, model_id):
         
         try:
             response = await client.post(url, json=payload, timeout=TIMEOUT)
-            if response.status_code != 200:
-                msg = f"Scenario {scenario['name']} failed with {response.status_code}: {response.text}"
-                logger.error(msg)
-                failures.append(msg)
-                continue
-            
-            data = response.json()
-            predictions = data.get("predictions", [])
-            if not predictions:
-                msg = f"Scenario {scenario['name']} returned empty predictions"
-                logger.error(msg)
-                failures.append(msg)
-                continue
-            
-            b64 = predictions[0].get("bytesBase64Encoded") or predictions[0].get("data")
-            if not b64:
-                msg = f"Scenario {scenario['name']} has no image data in prediction"
-                logger.error(msg)
-                failures.append(msg)
-                continue
-            
-            filename = f"{RESULTS_DIR}/cap_{scenario['name']}.png"
-            with open(filename, "wb") as f:
-                f.write(base64.b64decode(b64))
-            logger.info(f"✅ Scenario {scenario['name']} SUCCESS. Saved to {filename}")
-
+            if response.status_code == 200:
+                data = response.json()
+                predictions = data.get("predictions", [])
+                if predictions:
+                    b64 = predictions[0].get("bytesBase64Encoded") or predictions[0].get("data")
+                    if b64:
+                        filename = f"{RESULTS_DIR}/cap_{scenario['name']}.png"
+                        with open(filename, "wb") as f:
+                            f.write(base64.b64decode(b64))
+                        logger.info(f"✅ Scenario {scenario['name']} SUCCESS. Saved to {filename}")
+                    else:
+                        logger.error(f"❌ Scenario {scenario['name']} FAILED: No image data in prediction")
+                else:
+                    logger.error(f"❌ Scenario {scenario['name']} FAILED: Empty predictions")
+            else:
+                logger.error(f"❌ Scenario {scenario['name']} FAILED with {response.status_code}: {response.text}")
         except Exception as e:
-            msg = f"Scenario {scenario['name']} EXCEPTION: {e}"
-            logger.error(msg)
-            failures.append(msg)
-
-    if failures:
-        pytest.fail(f"Capability test failed with {len(failures)} errors:\n" + "\n".join(failures))
+            logger.error(f"❌ Scenario {scenario['name']} EXCEPTION: {e}")

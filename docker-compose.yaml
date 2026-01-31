@@ -12,6 +12,7 @@ services:
     environment:
       # Вариант 1: Просто проброс (значение берется из .env)
       - ADMIN_SECRET=${ADMIN_SECRET}
+      - ALLOWED_CLIENT_IPS=${ALLOWED_CLIENT_IPS}
       
       # Вариант 2: Проброс с дефолтным значением (если в .env забыли написать)
       - LOG_LEVEL=INFO
