@@ -6,7 +6,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - .:/app
       - ./credentials:/app/credentials
       - ./secrets:/app/secrets
     environment:
