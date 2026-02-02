@@ -46,7 +46,7 @@ class ServiceSettings(BaseSettings):
     """Configuration for external services."""
     vertex_base_url: str = "https://us-central1-aiplatform.googleapis.com"
     gemini_base_url: str = "https://generativelanguage.googleapis.com"
-    max_retries: int = 5
+    max_retries: int = 10
 
 
 class SecuritySettings(BaseSettings):
