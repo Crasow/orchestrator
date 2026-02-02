@@ -2,6 +2,7 @@ import re
 import os
 import httpx
 import logging
+import colorlog
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
@@ -14,11 +15,34 @@ from app.services.rotators.gemini import GeminiRotator
 from app.security.auth import auth_manager, get_current_admin
 
 # --- LOGGING ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+def setup_logging():
+    # Цветовая схема
+    log_colors = {
+        'DEBUG': 'cyan',
+        'INFO': 'green',
+        'WARNING': 'yellow',
+        'ERROR': 'red',
+        'CRITICAL': 'red,bg_white',
+    }
+    
+    # Формат логов: ЦВЕТ | ВРЕМЯ | УРОВЕНЬ | ИМЯ | СООБЩЕНИЕ
+    formatter = colorlog.ColoredFormatter(
+        "%(log_color)s%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        log_colors=log_colors
+    )
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+
+    # Применяем настройки ко всему приложению
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[handler],
+        force=True # Важно! Перезаписывает настройки uvicorn/python по умолчанию
+    )
+    
+setup_logging()
 logger = logging.getLogger("orchestrator")
 
 # --- STATE ---
