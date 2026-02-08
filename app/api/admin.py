@@ -2,6 +2,7 @@ import logging
 from fastapi import APIRouter, Request, Depends, HTTPException
 from app.core.state import vertex_rotator, gemini_rotator
 from app.security.auth import auth_manager, get_current_admin
+from app.services.statistics import stats_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -71,3 +72,10 @@ async def admin_status(current_admin: dict = Depends(get_current_admin)):
     except Exception as e:
         logger.error(f"Status check failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to get status")
+
+
+@router.get("/stats")
+async def get_system_stats(current_admin: dict = Depends(get_current_admin)):
+    """Детальная статистика использования"""
+    return stats_service.get_stats()
+

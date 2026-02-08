@@ -8,6 +8,7 @@ from app.config import ensure_directories
 from app.core.logging import setup_logging
 from app.core import state
 from app.api import admin, proxy
+from app.core.middleware import StatsMiddleware
 
 # --- LOGGING ---
 setup_logging()
@@ -43,6 +44,8 @@ app = FastAPI(
     if os.environ.get("ENABLE_DOCS", "false").lower() == "true"
     else None,
 )
+
+app.add_middleware(StatsMiddleware)
 
 # --- ROUTERS ---
 app.include_router(admin.router)
