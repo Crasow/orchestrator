@@ -8,13 +8,7 @@ services:
     volumes:
       - ./credentials:/app/credentials
       - ./secrets:/app/secrets
-    environment:
-      # Вариант 1: Просто проброс (значение берется из .env)
-      - ADMIN_SECRET=${ADMIN_SECRET}
-      - ALLOWED_CLIENT_IPS=${ALLOWED_CLIENT_IPS}
-      
-      # Вариант 2: Проброс с дефолтным значением (если в .env забыли написать)
-      - LOG_LEVEL=INFO
-      
-      # Вариант 3: Хардкод (только для публичных штук!)
-      - TZ=Europe/Kiev
+      - .:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - .env
