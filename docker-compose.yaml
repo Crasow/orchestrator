@@ -1,7 +1,7 @@
 services:
   orchestrator:
     build: .
-    container_name: vertex_orchestrator
+    container_name: orchestrator
     restart: always
     ports:
       - "8000:8000"
