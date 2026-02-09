@@ -54,16 +54,13 @@ class SecuritySettings(BaseSettings):
     admin_secret: str = Field("super-secret-key-123", min_length=16)
     admin_username: str = "admin"
     admin_password_hash: str = ""
-    allowed_client_ips: list[str] = ["127.0.0.1"]
+    # * means all IPs are allowed. Defaulting to * for better out-of-the-box Docker support.
+    allowed_client_ips: list[str] = ["*"]
 
     def __init__(self, **values):
         super().__init__(**values)
-        if not self.allowed_client_ips:
-            logger.warning(
-                "ALLOWED_CLIENT_IPS is not set. Proxy endpoints will be inaccessible "
-                "unless the client IP is '127.0.0.1' or a specific bypass is implemented."
-            )
-
+        if self.allowed_client_ips == ["*"]:
+            logger.warning("ALLOWED_CLIENT_IPS is set to *. Proxy endpoints will be accessible to all IPs.")
 
 class Settings(BaseSettings):
     """Main settings aggregator."""

@@ -18,12 +18,15 @@ async def proxy_gateway(request: Request, path: str):
     client_ip = getattr(request.client, "host", "unknown")
 
     # Проверка IP-адреса по белому списку
-    if settings.security.allowed_client_ips and client_ip not in settings.security.allowed_client_ips:
+    if settings.security.allowed_client_ips and settings.security.allowed_client_ips == ["*"]:
+        pass
+    elif settings.security.allowed_client_ips and client_ip not in settings.security.allowed_client_ips:
         logger.warning(f"Unauthorized access attempt from IP: {client_ip}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: Your IP address is not whitelisted.",
         )
+
 
     # 1. Определяем провайдера по URL
     is_gemini = "projects/" not in path
