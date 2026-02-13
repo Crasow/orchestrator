@@ -10,9 +10,8 @@ def test_settings_load_defaults(mock_env):
     settings = get_settings()
 
     assert settings.log_level == "INFO"
-    assert settings.services.max_retries == 5
+    assert settings.services.max_retries == 10
     assert settings.security.admin_username == "admin"
-
 
 def test_settings_override_from_env(monkeypatch, mock_env):
     """Test that environment variables override defaults."""

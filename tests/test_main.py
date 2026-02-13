@@ -11,10 +11,9 @@ def client(mock_env):
     """Test client fixture."""
     # Ensure settings are reloaded with mock_env
     get_settings.cache_clear()
-    new_settings = get_settings()
     
-    # Patch the settings object used in app.main
-    with patch("app.main.settings", new_settings):
+    # Mock Redis to avoid connection errors during app initialization
+    with patch("app.services.statistics.redis.from_url"):
         with TestClient(app) as c:
             yield c
 
@@ -66,8 +65,8 @@ def test_admin_status_success(client, admin_auth):
     token = login_res.json()["access_token"]
     
     # Mock rotators to avoid actual logic errors
-    with patch("app.main.vertex_rotator") as mock_vertex, \
-         patch("app.main.gemini_rotator") as mock_gemini, \
+    with patch("app.api.admin.vertex_rotator") as mock_vertex, \
+         patch("app.api.admin.gemini_rotator") as mock_gemini, \
          patch("app.security.audit.security_auditor") as mock_auditor:
         
         mock_vertex._pool = []
@@ -89,8 +88,8 @@ def test_admin_reload(client, admin_auth):
     login_res = client.post("/admin/login", json=admin_auth)
     token = login_res.json()["access_token"]
     
-    with patch("app.main.vertex_rotator") as mock_vertex, \
-         patch("app.main.gemini_rotator") as mock_gemini:
+    with patch("app.api.admin.vertex_rotator") as mock_vertex, \
+         patch("app.api.admin.gemini_rotator") as mock_gemini:
              
         mock_vertex._pool = []
         mock_gemini._keys = []
