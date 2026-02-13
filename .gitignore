@@ -32,6 +32,7 @@ coverage.xml
 htmlcov/
 .pytest_cache/
 .ruff_cache/
+postman_examples.txt
 
 integration_results/
 old_tests

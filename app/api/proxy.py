@@ -1,10 +1,12 @@
 import re
 import asyncio
 import logging
+import time
 from fastapi import APIRouter, Request, Response, HTTPException, status
 from fastapi.responses import StreamingResponse
 from app.config import settings
 from app.core import state
+from app.services.statistics import stats_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -41,6 +43,10 @@ async def proxy_gateway(request: Request, path: str):
     attempts = 0
     while attempts < settings.services.max_retries:
         attempts += 1
+        start_time = time.time()
+        key_id = "unknown"
+        provider = "gemini" if is_gemini else "vertex"
+        model = "unknown"
 
         try:
             if is_gemini:
@@ -49,11 +55,31 @@ async def proxy_gateway(request: Request, path: str):
 
                 api_key = state.gemini_rotator.get_next_key()
                 if not api_key:
+                    latency = time.time() - start_time
+                    await stats_service.record_request(
+                        provider=provider,
+                        model=model,
+                        key_id="system", # Нет ключа
+                        status_code=503,
+                        latency=latency
+                    )
                     return Response("No Gemini keys available", status_code=503)
 
                 params = dict(request.query_params)
                 params["key"] = api_key
+                key_id = api_key  # Для статистики
                 log_auth = f"Key ...{api_key[-4:]}"
+                
+                # Пытаемся извлечь модель из URL (например, models/gemini-pro:generateContent)
+                parts = path.split("/")
+                if "models" in parts:
+                    try:
+                        idx = parts.index("models") + 1
+                        if idx < len(parts):
+                            model = parts[idx].split(":")[0]
+                    except:
+                        pass
+
             else:
                 upstream_base = settings.services.vertex_base_url
                 cred = state.vertex_rotator.get_next_credential()
@@ -69,7 +95,20 @@ async def proxy_gateway(request: Request, path: str):
                 headers["Authorization"] = f"Bearer {token}"
                 headers["X-Goog-User-Project"] = cred.project_id
                 params = dict(request.query_params)
+                key_id = cred.project_id # Для статистики
                 log_auth = f"Project {cred.project_id}"
+                
+                # Пытаемся извлечь модель из URL
+                # locations/us-central1/publishers/google/models/gemini-pro
+                parts = path.split("/")
+                if "models" in parts:
+                    try:
+                        idx = parts.index("models") + 1
+                        if idx < len(parts):
+                            model = parts[idx]
+                    except:
+                        pass
+
 
             url = f"{upstream_base}/{target_path}"
             logger.info(f"Attempt {attempts} [{log_auth}] -> {url}")
@@ -82,6 +121,17 @@ async def proxy_gateway(request: Request, path: str):
                 request.method, url, content=body, headers=headers, params=params
             )
             resp = await state.http_client.send(req, stream=True)
+            
+            # Записываем статистику УСПЕШНОГО (с точки зрения сети) запроса
+            # Даже если там 4xx или 5xx от провайдера
+            latency = time.time() - start_time
+            await stats_service.record_request(
+                provider=provider,
+                model=model,
+                key_id=key_id,
+                status_code=resp.status_code,
+                latency=latency
+            )
 
             if resp.status_code in [429, 403, 503]:
                 err_body = await resp.aread()
@@ -100,7 +150,16 @@ async def proxy_gateway(request: Request, path: str):
             )
 
         except Exception as e:
+            latency = time.time() - start_time
             logger.error(f"Proxy error: {e}")
+            # Записываем ошибку сети (например, 500 internal app error или connection error)
+            await stats_service.record_request(
+                provider=provider,
+                model=model,
+                key_id=key_id,
+                status_code=500,
+                latency=latency
+            )
             await asyncio.sleep(0.5)
             continue
 

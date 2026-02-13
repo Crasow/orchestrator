@@ -45,8 +45,6 @@ app = FastAPI(
     else None,
 )
 
-app.add_middleware(StatsMiddleware)
-
 # --- ROUTERS ---
 app.include_router(admin.router)
 app.include_router(proxy.router)

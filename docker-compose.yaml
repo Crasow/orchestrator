@@ -13,3 +13,14 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     env_file:
       - .env
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    container_name: orchestrator_redis
+    restart: always
+    volumes:
+      - ./redis_data:/data
+    ports:
+      - "6379:6379"

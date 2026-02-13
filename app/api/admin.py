@@ -77,5 +77,5 @@ async def admin_status(current_admin: dict = Depends(get_current_admin)):
 @router.get("/stats")
 async def get_system_stats(current_admin: dict = Depends(get_current_admin)):
     """Детальная статистика использования"""
-    return stats_service.get_stats()
+    return await stats_service.get_stats()
 
