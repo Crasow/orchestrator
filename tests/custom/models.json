@@ -191,20 +191,6 @@
         "topK": 64
       },
       {
-        "name": "models/gemma-3-12b-it",
-        "version": "001",
-        "displayName": "Gemma 3 12B",
-        "inputTokenLimit": 32768,
-        "outputTokenLimit": 8192,
-        "supportedGenerationMethods": [
-          "generateContent",
-          "countTokens"
-        ],
-        "temperature": 1,
-        "topP": 0.95,
-        "topK": 64
-      },
-      {
         "name": "models/gemma-3-27b-it",
         "version": "001",
         "displayName": "Gemma 3 27B",

@@ -43,3 +43,4 @@ Thumbs.db
 
 # --- Custom Test Results ---
 tests/custom/results.json
+tests/custom/admin_results.json

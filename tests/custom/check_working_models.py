@@ -1,11 +1,16 @@
 import json
+import os
 import requests
 import time
 
-# Constants
+# Paths / constants
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_FILE = os.path.join(SCRIPT_DIR, "models.json")
+RESULTS_FILE = os.path.join(SCRIPT_DIR, "results.json")
 FAKE_PROJECT_ID = "test-project-id"
 LOCATION = "us-central1"
-BASE_URL = f"http://localhost:8000/v1/projects/{FAKE_PROJECT_ID}/locations/{LOCATION}/publishers/google/models"
+# BASE_URL = f"http://localhost:8000/v1/projects/{FAKE_PROJECT_ID}/locations/{LOCATION}/publishers/google/models"
+BASE_URL = f"http://localhost:8000/v1beta/models"
 
 # Status colors for terminal
 GREEN = "\033[92m"
@@ -15,10 +20,10 @@ RESET = "\033[0m"
 
 def load_models():
     try:
-        with open("./tests/custom/models.json", "r") as f:
+        with open(MODELS_FILE, "r") as f:
             return json.load(f)["models"]
     except FileNotFoundError:
-        print(f"{RED}Error: ./tests/custom/models.json not found.{RESET}")
+        print(f"{RED}Error: {MODELS_FILE} not found.{RESET}")
         return []
 
 def check_model(model, model_type):
@@ -56,20 +61,22 @@ def check_model(model, model_type):
         print(f"Checking {model_name}...", end="\r")
         response = requests.post(url, json=payload, timeout=30)
         
+        error_text = None
+        if response.status_code != 200:
+            try:
+                # Try to get structured JSON error if possible
+                error_text = response.json()
+            except:
+                error_text = response.text
+
         if response.status_code == 200:
-            return "working", response.status_code
+            return "working", response.status_code, None
         elif response.status_code == 404:
-            return "not_found", response.status_code
-        elif response.status_code == 400:
-             # 400 often means the model exists but our payload wasn't perfect, 
-             # or parameters were wrong, but the endpoint is there.
-             # However, strict "working" usually implies 200.
-             # Let's count it as error for now but log code.
-            return "error", response.status_code
+            return "not_found", response.status_code, error_text
         else:
-            return "error", response.status_code
+            return "error", response.status_code, error_text
     except requests.exceptions.RequestException as e:
-        return "connection_error", str(e)
+        return "connection_error", 0, str(e)
 
 def main():
     models = load_models()
@@ -96,13 +103,14 @@ def main():
         if m_type == "unknown":
             continue
 
-        status, code = check_model(model, m_type)
+        status, code, error_msg = check_model(model, m_type)
         
         result_entry = {
             "name": model["name"],
             "type": m_type,
             "status": status,
-            "code": code
+            "code": code,
+            "error": error_msg
         }
 
         if status == "working":
@@ -132,10 +140,9 @@ def main():
             print(f" - {m['name']} ({m['type']}) : Status {m['code']}")
 
     # Save to file
-    output_path = "./tests/custom/results.json"
-    with open(output_path, "w") as f:
+    with open(RESULTS_FILE, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\nResults saved to {output_path}")
+    print(f"\nResults saved to {RESULTS_FILE}")
 
 if __name__ == "__main__":
     main()
