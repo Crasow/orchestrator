@@ -47,7 +47,8 @@ class ServiceSettings(BaseSettings):
     vertex_base_url: str = "https://us-central1-aiplatform.googleapis.com"
     gemini_base_url: str = "https://generativelanguage.googleapis.com"
     max_retries: int = 10
-    redis_url: str = "redis://redis:6379/0"
+    database_url: str = "postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator"
+    stats_retention_days: int = 30
 
 
 class SecuritySettings(BaseSettings):
