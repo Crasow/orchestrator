@@ -1,11 +1,18 @@
 import logging
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, Query
 from app.core.state import vertex_rotator, gemini_rotator
 from app.security.auth import auth_manager, get_current_admin
-from app.services.statistics import stats_service
+from app.services import statistics
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin"])
+
+
+def _get_stats_service():
+    svc = statistics.stats_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Stats service not initialized")
+    return svc
 
 
 @router.post("/login")
@@ -41,7 +48,6 @@ async def admin_reload(
         vertex_rotator.reload()
         gemini_rotator.reload()
 
-        # Логируем действие админа
         logger.info(f"Admin {current_admin['sub']} reloaded credentials")
 
         return {
@@ -75,7 +81,59 @@ async def admin_status(current_admin: dict = Depends(get_current_admin)):
 
 
 @router.get("/stats")
-async def get_system_stats(current_admin: dict = Depends(get_current_admin)):
-    """Детальная статистика использования"""
-    return await stats_service.get_stats()
+async def get_system_stats(
+    current_admin: dict = Depends(get_current_admin),
+    hours: int = Query(24, ge=1),
+    provider: str | None = Query(None),
+):
+    """Агрегированная статистика за период"""
+    svc = _get_stats_service()
+    return await svc.get_stats(hours=hours, provider=provider)
 
+
+@router.get("/stats/requests")
+async def get_requests_log(
+    current_admin: dict = Depends(get_current_admin),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    model: str | None = Query(None),
+    provider: str | None = Query(None),
+    errors_only: bool = Query(False),
+):
+    """Лог запросов с пагинацией"""
+    svc = _get_stats_service()
+    return await svc.get_requests_log(
+        limit=limit, offset=offset, model=model,
+        provider=provider, errors_only=errors_only,
+    )
+
+
+@router.get("/stats/models")
+async def get_model_stats(
+    current_admin: dict = Depends(get_current_admin),
+    hours: int = Query(24, ge=1),
+):
+    """Статистика по моделям"""
+    svc = _get_stats_service()
+    return await svc.get_model_stats(hours=hours)
+
+
+@router.get("/stats/tokens")
+async def get_token_stats(
+    current_admin: dict = Depends(get_current_admin),
+    hours: int = Query(24, ge=1),
+    group_by: str = Query("hour", pattern="^(hour|day|model|key)$"),
+):
+    """Использование токенов"""
+    svc = _get_stats_service()
+    return await svc.get_token_stats(hours=hours, group_by=group_by)
+
+
+@router.delete("/stats/cleanup")
+async def cleanup_stats(
+    current_admin: dict = Depends(get_current_admin),
+    days: int = Query(30, ge=1),
+):
+    """Очистка старых записей"""
+    svc = _get_stats_service()
+    return await svc.cleanup(days=days)

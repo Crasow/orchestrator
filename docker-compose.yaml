@@ -14,13 +14,26 @@ services:
     env_file:
       - .env
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
 
-  redis:
-    image: redis:alpine
-    container_name: orchestrator_redis
+  postgres:
+    image: postgres:16-alpine
+    container_name: orchestrator_postgres
     restart: always
+    environment:
+      POSTGRES_USER: orchestrator
+      POSTGRES_PASSWORD: orchestrator
+      POSTGRES_DB: orchestrator
     volumes:
-      - ./redis_data:/data
+      - postgres_data:/var/lib/postgresql/data
     ports:
-      - "6379:6379"
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrator"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

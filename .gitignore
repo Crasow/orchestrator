@@ -35,6 +35,8 @@ htmlcov/
 postman_examples.txt
 
 integration_results/
+demo_results/
+nul
 old_tests
 
 # --- OS Files ---

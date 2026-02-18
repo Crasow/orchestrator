@@ -1,120 +1,364 @@
 import time
-import asyncio
 import logging
-from typing import Dict, Optional
-import redis.asyncio as redis
-from app.config import settings
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from sqlalchemy import select, func, delete, case, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.db.models import ApiKey, Model, Request
 
 logger = logging.getLogger(__name__)
 
-class RedisStatsService:
-    def __init__(self):
-        # Инициализируем соединение с Redis
-        # decode_responses=True позволяет получать строки вместо байтов
-        self.redis = redis.from_url(settings.services.redis_url, decode_responses=True)
-        self.start_time = time.time()
+
+class StatsService:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._session_factory = session_factory
+        self._start_time = time.time()
+        # In-memory FK caches: key_id_str -> api_keys.id, model_name -> models.id
+        self._api_key_cache: dict[str, int] = {}
+        self._model_cache: dict[str, int] = {}
+
+    async def _resolve_api_key_id(self, session: AsyncSession, key_id: str, provider: str) -> int | None:
+        if key_id in self._api_key_cache:
+            return self._api_key_cache[key_id]
+        stmt = pg_insert(ApiKey).values(provider=provider, key_id=key_id).on_conflict_do_nothing(index_elements=["key_id"])
+        await session.execute(stmt)
+        result = await session.execute(select(ApiKey.id).where(ApiKey.key_id == key_id))
+        row = result.scalar_one_or_none()
+        if row is not None:
+            self._api_key_cache[key_id] = row
+        return row
+
+    async def _resolve_model_id(self, session: AsyncSession, model_name: str, provider: str) -> int | None:
+        if not model_name or model_name == "unknown":
+            return None
+        if model_name in self._model_cache:
+            return self._model_cache[model_name]
+        stmt = pg_insert(Model).values(name=model_name, provider=provider).on_conflict_do_nothing(index_elements=["name"])
+        await session.execute(stmt)
+        result = await session.execute(select(Model.id).where(Model.name == model_name))
+        row = result.scalar_one_or_none()
+        if row is not None:
+            self._model_cache[model_name] = row
+        return row
 
     async def record_request(
-        self, 
-        provider: str, 
-        model: str, 
-        key_id: str, 
-        status_code: int, 
-        latency: float
-    ):
-        """
-        Записывает статистику запроса в Redis.
-        Использует pipeline для атомарности и скорости (один сетевой запрос вместо пяти).
-        """
+        self,
+        *,
+        provider: str,
+        model: str,
+        key_id: str,
+        status_code: int,
+        latency_ms: int,
+        action: str | None = None,
+        http_method: str = "POST",
+        url_path: str = "",
+        client_ip: str | None = None,
+        user_agent: str | None = None,
+        attempt_count: int = 1,
+        prompt_tokens: int | None = None,
+        candidates_tokens: int | None = None,
+        total_tokens: int | None = None,
+        request_body: dict | None = None,
+        response_body: dict | None = None,
+        is_error: bool = False,
+        error_detail: str | None = None,
+        request_size: int | None = None,
+        response_size: int | None = None,
+    ) -> None:
         try:
-            async with self.redis.pipeline() as pipe:
-                # 1. Общие счетчики
-                pipe.incr("global:requests")
-                if status_code >= 400:
-                    pipe.incr("global:errors")
-                
-                # 2. Сохраняем идентификатор ключа в список известных ключей
-                # known_keys:gemini или known_keys:vertex
-                pipe.sadd(f"known_keys:{provider}", key_id)
-
-                # 3. Статистика по конкретному ключу
-                # stats:key:{key_id}:total -> +1
-                base_key = f"stats:key:{key_id}"
-                pipe.incr(f"{base_key}:total")
-                
-                # stats:key:{key_id}:{status_code} -> +1 (например, stats:key:xyz:200)
-                pipe.incr(f"{base_key}:{status_code}")
-                
-                if status_code >= 400:
-                    pipe.incr(f"{base_key}:errors")
-
-                # Опционально: можно хранить latency, но в Redis это сложнее.
-                # Пока пропустим для простоты, или можно хранить сумму и делить на total.
-                pipe.incrbyfloat(f"{base_key}:latency_sum", latency)
-                
-                # Выполняем все команды разом
-                await pipe.execute()
-                
+            async with self._session_factory() as session:
+                async with session.begin():
+                    api_key_id = await self._resolve_api_key_id(session, key_id, provider)
+                    model_id = await self._resolve_model_id(session, model, provider)
+                    req = Request(
+                        api_key_id=api_key_id,
+                        model_id=model_id,
+                        provider=provider,
+                        action=action,
+                        http_method=http_method,
+                        url_path=url_path,
+                        client_ip=client_ip,
+                        user_agent=user_agent,
+                        status_code=status_code,
+                        latency_ms=latency_ms,
+                        attempt_count=attempt_count,
+                        prompt_tokens=prompt_tokens,
+                        candidates_tokens=candidates_tokens,
+                        total_tokens=total_tokens,
+                        request_body=request_body,
+                        response_body=response_body,
+                        is_error=is_error,
+                        error_detail=error_detail,
+                        request_size=request_size,
+                        response_size=response_size,
+                    )
+                    session.add(req)
         except Exception as e:
-            # Не роняем прод, если метрики не записались
-            logger.error(f"Failed to record stats to Redis: {e}")
+            logger.error(f"Failed to record stats: {e}")
 
-    async def get_stats(self) -> dict:
-        """Собирает полную статистику из Redis"""
+    async def get_stats(self, hours: int = 24, provider: str | None = None) -> dict:
         try:
-            # Получаем общие данные
-            total_req = int(await self.redis.get("global:requests") or 0)
-            total_err = int(await self.redis.get("global:errors") or 0)
-            
-            # Получаем списки известных ключей
-            gemini_keys = await self.redis.smembers("known_keys:gemini")
-            vertex_projects = await self.redis.smembers("known_keys:vertex")
-            
-            all_keys_data = {}
+            async with self._session_factory() as session:
+                since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-            # Собираем данные по каждому ключу Gemini
-            for key in gemini_keys:
-                all_keys_data[key] = await self._get_key_stats(key, "gemini")
+                stmt = select(
+                    func.count(Request.id).label("total_requests"),
+                    func.count(case((Request.is_error == True, 1))).label("total_errors"),
+                    func.avg(Request.latency_ms).label("avg_latency_ms"),
+                    func.sum(Request.prompt_tokens).label("total_prompt_tokens"),
+                    func.sum(Request.candidates_tokens).label("total_candidates_tokens"),
+                    func.sum(Request.total_tokens).label("total_tokens"),
+                ).where(Request.created_at >= since)
+                if provider:
+                    stmt = stmt.where(Request.provider == provider)
 
-            # Собираем данные по каждому проекту Vertex
-            for proj in vertex_projects:
-                all_keys_data[proj] = await self._get_key_stats(proj, "vertex")
+                result = await session.execute(stmt)
+                row = result.one()
 
-            uptime = time.time() - self.start_time
+                total_req = row.total_requests or 0
+                total_err = row.total_errors or 0
 
-            return {
-                "uptime_seconds": round(uptime, 2),
-                "total_requests": total_req,
-                "total_errors": total_err,
-                "error_rate": round((total_err / total_req * 100), 2) if total_req > 0 else 0,
-                "keys_usage": all_keys_data
-            }
+                return {
+                    "uptime_seconds": round(time.time() - self._start_time, 2),
+                    "period_hours": hours,
+                    "total_requests": total_req,
+                    "total_errors": total_err,
+                    "error_rate": round((total_err / total_req * 100), 2) if total_req > 0 else 0,
+                    "avg_latency_ms": round(float(row.avg_latency_ms or 0), 2),
+                    "total_prompt_tokens": row.total_prompt_tokens or 0,
+                    "total_candidates_tokens": row.total_candidates_tokens or 0,
+                    "total_tokens": row.total_tokens or 0,
+                }
         except Exception as e:
-            logger.error(f"Failed to get stats from Redis: {e}")
+            logger.error(f"Failed to get stats: {e}")
             return {"error": str(e)}
 
-    async def _get_key_stats(self, key_id: str, provider: str) -> dict:
-        """Вспомогательный метод для чтения статистики по одному ключу"""
-        base_key = f"stats:key:{key_id}"
-        
-        # Запрашиваем основные метрики
-        total = int(await self.redis.get(f"{base_key}:total") or 0)
-        errors = int(await self.redis.get(f"{base_key}:errors") or 0)
-        latency_sum = float(await self.redis.get(f"{base_key}:latency_sum") or 0.0)
-        
-        # Получаем разбивку по кодам ответов
-        # Ищем ключи вида stats:key:{key_id}:200, stats:key:{key_id}:429...
-        # В продакшене лучше использовать HASH (hgetall), но для наглядности так
-        # Чтобы не сканировать весь Redis, просто вернем основные.
-        # Если нужна детализация по кодам, лучше использовать Redis Hash для каждого ключа.
-        
-        return {
-            "provider": provider,
-            "total_requests": total,
-            "total_errors": errors,
-            "avg_latency": round(latency_sum / total, 4) if total > 0 else 0,
-            # Можно допилить получение кодов
-        }
+    async def get_requests_log(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        model: str | None = None,
+        provider: str | None = None,
+        errors_only: bool = False,
+    ) -> dict:
+        try:
+            async with self._session_factory() as session:
+                stmt = (
+                    select(
+                        Request.id,
+                        Request.provider,
+                        Request.action,
+                        Request.http_method,
+                        Request.url_path,
+                        Request.client_ip,
+                        Request.status_code,
+                        Request.latency_ms,
+                        Request.attempt_count,
+                        Request.prompt_tokens,
+                        Request.candidates_tokens,
+                        Request.total_tokens,
+                        Request.is_error,
+                        Request.error_detail,
+                        Request.request_size,
+                        Request.response_size,
+                        Request.created_at,
+                        ApiKey.key_id.label("api_key"),
+                        Model.name.label("model_name"),
+                    )
+                    .outerjoin(ApiKey, Request.api_key_id == ApiKey.id)
+                    .outerjoin(Model, Request.model_id == Model.id)
+                    .order_by(Request.created_at.desc())
+                )
 
-# Создаем глобальный инстанс
-stats_service = RedisStatsService()
+                if model:
+                    stmt = stmt.where(Model.name == model)
+                if provider:
+                    stmt = stmt.where(Request.provider == provider)
+                if errors_only:
+                    stmt = stmt.where(Request.is_error == True)
+
+                count_stmt = select(func.count(Request.id))
+                if model:
+                    count_stmt = count_stmt.join(Model, Request.model_id == Model.id).where(Model.name == model)
+                if provider:
+                    count_stmt = count_stmt.where(Request.provider == provider)
+                if errors_only:
+                    count_stmt = count_stmt.where(Request.is_error == True)
+
+                total_result = await session.execute(count_stmt)
+                total = total_result.scalar()
+
+                stmt = stmt.limit(limit).offset(offset)
+                result = await session.execute(stmt)
+                rows = result.all()
+
+                return {
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset,
+                    "requests": [
+                        {
+                            "id": r.id,
+                            "provider": r.provider,
+                            "api_key": r.api_key,
+                            "model": r.model_name,
+                            "action": r.action,
+                            "http_method": r.http_method,
+                            "url_path": r.url_path,
+                            "client_ip": r.client_ip,
+                            "status_code": r.status_code,
+                            "latency_ms": r.latency_ms,
+                            "attempt_count": r.attempt_count,
+                            "prompt_tokens": r.prompt_tokens,
+                            "candidates_tokens": r.candidates_tokens,
+                            "total_tokens": r.total_tokens,
+                            "is_error": r.is_error,
+                            "error_detail": r.error_detail,
+                            "request_size": r.request_size,
+                            "response_size": r.response_size,
+                            "created_at": r.created_at.isoformat() if r.created_at else None,
+                        }
+                        for r in rows
+                    ],
+                }
+        except Exception as e:
+            logger.error(f"Failed to get requests log: {e}")
+            return {"error": str(e)}
+
+    async def get_model_stats(self, hours: int = 24) -> dict:
+        try:
+            async with self._session_factory() as session:
+                since = datetime.now(timezone.utc) - timedelta(hours=hours)
+                stmt = (
+                    select(
+                        Model.name,
+                        Model.provider,
+                        func.count(Request.id).label("total_requests"),
+                        func.count(case((Request.is_error == True, 1))).label("total_errors"),
+                        func.avg(Request.latency_ms).label("avg_latency_ms"),
+                        func.sum(Request.total_tokens).label("total_tokens"),
+                    )
+                    .join(Model, Request.model_id == Model.id)
+                    .where(Request.created_at >= since)
+                    .group_by(Model.name, Model.provider)
+                    .order_by(func.count(Request.id).desc())
+                )
+                result = await session.execute(stmt)
+                rows = result.all()
+                return {
+                    "period_hours": hours,
+                    "models": [
+                        {
+                            "name": r.name,
+                            "provider": r.provider,
+                            "total_requests": r.total_requests,
+                            "total_errors": r.total_errors,
+                            "avg_latency_ms": round(float(r.avg_latency_ms or 0), 2),
+                            "total_tokens": r.total_tokens or 0,
+                        }
+                        for r in rows
+                    ],
+                }
+        except Exception as e:
+            logger.error(f"Failed to get model stats: {e}")
+            return {"error": str(e)}
+
+    async def get_token_stats(self, hours: int = 24, group_by: str = "hour") -> dict:
+        try:
+            async with self._session_factory() as session:
+                since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+                if group_by == "model":
+                    stmt = (
+                        select(
+                            Model.name.label("group_key"),
+                            func.sum(Request.prompt_tokens).label("prompt_tokens"),
+                            func.sum(Request.candidates_tokens).label("candidates_tokens"),
+                            func.sum(Request.total_tokens).label("total_tokens"),
+                            func.count(Request.id).label("request_count"),
+                        )
+                        .join(Model, Request.model_id == Model.id)
+                        .where(Request.created_at >= since)
+                        .group_by(Model.name)
+                        .order_by(func.sum(Request.total_tokens).desc())
+                    )
+                elif group_by == "key":
+                    stmt = (
+                        select(
+                            ApiKey.key_id.label("group_key"),
+                            func.sum(Request.prompt_tokens).label("prompt_tokens"),
+                            func.sum(Request.candidates_tokens).label("candidates_tokens"),
+                            func.sum(Request.total_tokens).label("total_tokens"),
+                            func.count(Request.id).label("request_count"),
+                        )
+                        .join(ApiKey, Request.api_key_id == ApiKey.id)
+                        .where(Request.created_at >= since)
+                        .group_by(ApiKey.key_id)
+                        .order_by(func.sum(Request.total_tokens).desc())
+                    )
+                elif group_by == "day":
+                    stmt = (
+                        select(
+                            func.date_trunc("day", Request.created_at).label("group_key"),
+                            func.sum(Request.prompt_tokens).label("prompt_tokens"),
+                            func.sum(Request.candidates_tokens).label("candidates_tokens"),
+                            func.sum(Request.total_tokens).label("total_tokens"),
+                            func.count(Request.id).label("request_count"),
+                        )
+                        .where(Request.created_at >= since)
+                        .group_by(text("1"))
+                        .order_by(text("1"))
+                    )
+                else:  # hour
+                    stmt = (
+                        select(
+                            func.date_trunc("hour", Request.created_at).label("group_key"),
+                            func.sum(Request.prompt_tokens).label("prompt_tokens"),
+                            func.sum(Request.candidates_tokens).label("candidates_tokens"),
+                            func.sum(Request.total_tokens).label("total_tokens"),
+                            func.count(Request.id).label("request_count"),
+                        )
+                        .where(Request.created_at >= since)
+                        .group_by(text("1"))
+                        .order_by(text("1"))
+                    )
+
+                result = await session.execute(stmt)
+                rows = result.all()
+
+                return {
+                    "period_hours": hours,
+                    "group_by": group_by,
+                    "data": [
+                        {
+                            "group": str(r.group_key) if r.group_key else None,
+                            "prompt_tokens": r.prompt_tokens or 0,
+                            "candidates_tokens": r.candidates_tokens or 0,
+                            "total_tokens": r.total_tokens or 0,
+                            "request_count": r.request_count,
+                        }
+                        for r in rows
+                    ],
+                }
+        except Exception as e:
+            logger.error(f"Failed to get token stats: {e}")
+            return {"error": str(e)}
+
+    async def cleanup(self, days: int = 30) -> dict:
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                    stmt = delete(Request).where(Request.created_at < cutoff)
+                    result = await session.execute(stmt)
+                    return {"deleted": result.rowcount, "older_than_days": days}
+        except Exception as e:
+            logger.error(f"Failed to cleanup stats: {e}")
+            return {"error": str(e)}
+
+
+# Will be initialized in app lifespan
+stats_service: StatsService | None = None
