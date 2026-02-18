@@ -42,3 +42,7 @@ old_tests
 # --- OS Files ---
 .DS_Store
 Thumbs.db
+
+# --- Custom Test Results ---
+tests/custom/results.json
+tests/custom/admin_results.json
