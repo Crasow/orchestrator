@@ -6,13 +6,10 @@ import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Request, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jwt.exceptions import PyJWTError, ExpiredSignatureError
 import jwt
 
 logger = logging.getLogger("orchestrator.auth")
-
-security = HTTPBearer()
 
 
 class AuthManager:
@@ -193,28 +190,35 @@ class AuthManager:
         logger.info(f"Admin {username} authenticated successfully from {client_ip}")
         return token
 
+    def _extract_token(self, request: Request) -> str:
+        """Извлекает JWT токен: сначала из cookie, потом из Authorization заголовка."""
+        # 1. Cookie
+        token = request.cookies.get("access_token")
+        if token:
+            return token
+
+        # 2. Authorization: Bearer <token>
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[7:]
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
     async def verify_admin_token(self, request: Request) -> Dict[str, Any]:
-        """Проверяет админский токен из запроса."""
+        """Проверяет админский токен из cookie или заголовка."""
         try:
-            credentials: Optional[HTTPAuthorizationCredentials] = await security(
-                request
-            )
-            if credentials is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Authentication required",
-                )
-            token = credentials.credentials
+            token = self._extract_token(request)
             payload = self.verify_token(token)
 
-            # Проверяем роль
             if payload.get("role") != "admin":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Admin access required",
                 )
 
-            # Проверяем IP (опционально)
             client_ip = request.client.host if request.client else "unknown"
             token_ip = payload.get("ip")
             if token_ip and token_ip != client_ip:

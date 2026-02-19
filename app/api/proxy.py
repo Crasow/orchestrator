@@ -281,14 +281,13 @@ async def proxy_gateway(request: Request, path: str):
 
             else:
                 # Non-streaming: read full response
-                resp = await state.http_client.send(req, stream=True)
+                resp = await state.http_client.send(req)
 
                 if resp.status_code in [429, 403, 503]:
-                    err_body = await resp.aread()
-                    logger.warning(f"Provider Error {resp.status_code}: {err_body[:200]}")
+                    logger.warning(f"Provider Error {resp.status_code}: {resp.content[:200]}")
                     continue
 
-                resp_body = await resp.aread()
+                resp_body = resp.content
                 latency_ms = int((time.time() - start_time) * 1000)
 
                 bg = BackgroundTask(

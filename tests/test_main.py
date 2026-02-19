@@ -15,13 +15,19 @@ def client(mock_env):
          patch("app.main.async_engine") as mock_main_engine, \
          patch("app.main.async_session_factory"), \
          patch("app.main.Base"):
-        # Mock the engine.begin() async context manager for create_all
         mock_conn = AsyncMock()
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
         mock_ctx.__aexit__ = AsyncMock(return_value=None)
         mock_main_engine.begin.return_value = mock_ctx
         mock_main_engine.dispose = AsyncMock()
+
+        # Mock async_engine.connect() for health check
+        mock_connect_ctx = AsyncMock()
+        mock_connect_conn = AsyncMock()
+        mock_connect_ctx.__aenter__ = AsyncMock(return_value=mock_connect_conn)
+        mock_connect_ctx.__aexit__ = AsyncMock(return_value=None)
+        mock_main_engine.connect.return_value = mock_connect_ctx
 
         from app.main import app
         with TestClient(app) as c:
@@ -41,17 +47,34 @@ def admin_auth(monkeypatch):
     return {"username": "admin", "password": password}
 
 
-def test_health_check_via_proxy(client):
-    pass
+def _login(client, admin_auth) -> TestClient:
+    """Login and return client with cookie set."""
+    response = client.post("/admin/login", json=admin_auth)
+    assert response.status_code == 200
+    assert "access_token" in response.cookies
+    return client
+
+
+def test_health_check(client):
+    """Test health check endpoint returns status."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert "status" in data
+    assert "database" in data
+    assert "gemini_keys" in data
+    assert "vertex_credentials" in data
 
 
 def test_admin_login_success(client, admin_auth):
-    """Test successful admin login."""
+    """Test successful admin login sets cookie."""
     response = client.post("/admin/login", json=admin_auth)
     assert response.status_code == 200
     data = response.json()
-    assert "access_token" in data
-    assert data["token_type"] == "bearer"
+    assert data["status"] == "ok"
+    assert data["username"] == "admin"
+    # Cookie should be set
+    assert "access_token" in response.cookies
 
 
 def test_admin_login_fail(client, admin_auth):
@@ -63,6 +86,17 @@ def test_admin_login_fail(client, admin_auth):
     assert response.status_code == 401
 
 
+def test_admin_logout(client, admin_auth):
+    """Test logout clears cookie."""
+    _login(client, admin_auth)
+    response = client.post("/admin/logout")
+    assert response.status_code == 200
+    # Set-Cookie header should delete the cookie (max-age=0 or expires in the past)
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "access_token" in set_cookie
+    assert 'max-age=0' in set_cookie.lower() or "expires" in set_cookie.lower()
+
+
 def test_admin_status_protected(client):
     """Test that /admin/status requires authentication."""
     response = client.get("/admin/status")
@@ -70,22 +104,14 @@ def test_admin_status_protected(client):
 
 
 def test_admin_status_success(client, admin_auth):
-    """Test /admin/status with valid token."""
-    login_res = client.post("/admin/login", json=admin_auth)
-    token = login_res.json()["access_token"]
+    """Test /admin/status with cookie auth."""
+    _login(client, admin_auth)
 
-    with patch("app.api.admin.vertex_rotator") as mock_vertex, \
-         patch("app.api.admin.gemini_rotator") as mock_gemini, \
-         patch("app.security.audit.security_auditor") as mock_auditor:
+    with patch("app.api.admin.state") as mock_state:
+        mock_state.vertex_rotator.credential_count = 0
+        mock_state.gemini_rotator.key_count = 0
 
-        mock_vertex._pool = []
-        mock_gemini._keys = []
-        mock_auditor.get_suspicious_activity.return_value = []
-
-        response = client.get(
-            "/admin/status",
-            headers={"Authorization": f"Bearer {token}"}
-        )
+        response = client.get("/admin/status")
 
         assert response.status_code == 200
         data = response.json()
@@ -94,21 +120,37 @@ def test_admin_status_success(client, admin_auth):
 
 
 def test_admin_reload(client, admin_auth):
-    """Test /admin/reload endpoint."""
-    login_res = client.post("/admin/login", json=admin_auth)
-    token = login_res.json()["access_token"]
+    """Test /admin/reload endpoint with cookie auth."""
+    _login(client, admin_auth)
 
-    with patch("app.api.admin.vertex_rotator") as mock_vertex, \
-         patch("app.api.admin.gemini_rotator") as mock_gemini:
+    with patch("app.api.admin.state") as mock_state:
+        mock_state.vertex_rotator.credential_count = 0
+        mock_state.gemini_rotator.key_count = 0
 
-        mock_vertex._pool = []
-        mock_gemini._keys = []
+        response = client.post("/admin/reload")
 
-        response = client.post(
-            "/admin/reload",
-            headers={"Authorization": f"Bearer {token}"}
+        assert response.status_code == 200
+        assert mock_state.vertex_rotator.reload.called
+        assert mock_state.gemini_rotator.reload.called
+
+
+def test_bearer_header_still_works(client, admin_auth):
+    """Test backward compatibility: Authorization header still works."""
+    from app.security.auth import auth_manager
+    # Create token with testclient IP (that's what TestClient reports)
+    token = auth_manager.authenticate_admin(
+        admin_auth["username"], admin_auth["password"], "testclient"
+    )
+
+    with patch("app.api.admin.state") as mock_state:
+        mock_state.vertex_rotator.credential_count = 0
+        mock_state.gemini_rotator.key_count = 0
+
+        response = client.get(
+            "/admin/status",
+            headers={"Authorization": f"Bearer {token}"},
         )
 
         assert response.status_code == 200
-        assert mock_vertex.reload.called
-        assert mock_gemini.reload.called
+        data = response.json()
+        assert data["status"] == "operational"

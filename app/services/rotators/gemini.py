@@ -56,6 +56,14 @@ class GeminiRotator:
         except Exception as e:
             logger.error(f"Failed to load Gemini keys: {e}")
 
+    @property
+    def keys(self) -> List[str]:
+        return list(self._keys)
+
+    @property
+    def key_count(self) -> int:
+        return len(self._keys)
+
     def get_next_key(self) -> Optional[str]:
         if not self._keys:
             return None

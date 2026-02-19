@@ -2,9 +2,10 @@ import os
 import logging
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from app.config import ensure_directories
+from app.config import ensure_directories, settings
 from app.core.logging import setup_logging
 from app.core import state
 from app.api import admin, proxy
@@ -50,6 +51,36 @@ app = FastAPI(
     if os.environ.get("ENABLE_DOCS", "false").lower() == "true"
     else None,
 )
+
+# --- CORS ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.security.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- HEALTH ---
+@app.get("/health")
+async def health_check():
+    """Health check endpoint (no auth required)."""
+    from sqlalchemy import text as sa_text
+
+    db_ok = False
+    try:
+        async with async_engine.connect() as conn:
+            await conn.execute(sa_text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        pass
+
+    return {
+        "status": "healthy" if db_ok else "degraded",
+        "database": "connected" if db_ok else "unavailable",
+        "gemini_keys": state.gemini_rotator.key_count,
+        "vertex_credentials": state.vertex_rotator.credential_count,
+    }
 
 # --- ROUTERS ---
 app.include_router(admin.router)

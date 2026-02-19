@@ -59,6 +59,14 @@ class VertexRotator:
         self._pool = new_pool
         logger.info(f"Loaded {len(self._pool)} Vertex credentials.")
 
+    @property
+    def credentials(self) -> List[VertexCredential]:
+        return list(self._pool)
+
+    @property
+    def credential_count(self) -> int:
+        return len(self._pool)
+
     def get_next_credential(self) -> VertexCredential:
         if not self._pool:
             raise RuntimeError("Vertex Credential pool is empty")

@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, func, delete, case, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import ApiKey, Model, Request
@@ -23,10 +22,13 @@ class StatsService:
     async def _resolve_api_key_id(self, session: AsyncSession, key_id: str, provider: str) -> int | None:
         if key_id in self._api_key_cache:
             return self._api_key_cache[key_id]
-        stmt = pg_insert(ApiKey).values(provider=provider, key_id=key_id).on_conflict_do_nothing(index_elements=["key_id"])
-        await session.execute(stmt)
         result = await session.execute(select(ApiKey.id).where(ApiKey.key_id == key_id))
         row = result.scalar_one_or_none()
+        if row is None:
+            ak = ApiKey(provider=provider, key_id=key_id)
+            session.add(ak)
+            await session.flush()
+            row = ak.id
         if row is not None:
             self._api_key_cache[key_id] = row
         return row
@@ -36,10 +38,13 @@ class StatsService:
             return None
         if model_name in self._model_cache:
             return self._model_cache[model_name]
-        stmt = pg_insert(Model).values(name=model_name, provider=provider).on_conflict_do_nothing(index_elements=["name"])
-        await session.execute(stmt)
         result = await session.execute(select(Model.id).where(Model.name == model_name))
         row = result.scalar_one_or_none()
+        if row is None:
+            m = Model(name=model_name, provider=provider)
+            session.add(m)
+            await session.flush()
+            row = m.id
         if row is not None:
             self._model_cache[model_name] = row
         return row
@@ -300,6 +305,7 @@ class StatsService:
                         .order_by(func.sum(Request.total_tokens).desc())
                     )
                 elif group_by == "day":
+                    # NOTE: date_trunc is PostgreSQL-only; not testable on SQLite
                     stmt = (
                         select(
                             func.date_trunc("day", Request.created_at).label("group_key"),
@@ -313,6 +319,7 @@ class StatsService:
                         .order_by(text("1"))
                     )
                 else:  # hour
+                    # NOTE: date_trunc is PostgreSQL-only; not testable on SQLite
                     stmt = (
                         select(
                             func.date_trunc("hour", Request.created_at).label("group_key"),

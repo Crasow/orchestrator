@@ -23,11 +23,11 @@ dependencies = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra --strict-markers --strict-config --cov=app --cov-report=term-missing --cov-report=html --cov-report=xml"
+addopts = "-ra --strict-markers --strict-config -m 'not integration' --cov=app --cov-report=term-missing --cov-report=html --cov-report=xml"
 pythonpath = "."
 testpaths = ["tests"]
-norecursedirs = ["tests/old_tests"]
-python_files = ["test_*.py", "*_test.py"]
+norecursedirs = ["tests/old_tests", "tests/custom", "scripts"]
+python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"

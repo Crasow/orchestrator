@@ -27,70 +27,13 @@ def stats_service(db_session):
     return StatsService(db_session)
 
 
-async def _insert_test_request(
-    session_factory,
-    provider="gemini",
-    status_code=200,
-    latency_ms=100,
-    is_error=False,
-    model_name=None,
-    key_id_str=None,
-    prompt_tokens=None,
-    candidates_tokens=None,
-    total_tokens=None,
-):
-    """Helper to insert a test request directly, bypassing pg_insert."""
-    async with session_factory() as session:
-        async with session.begin():
-            api_key_pk = None
-            if key_id_str:
-                # Check if key exists
-                result = await session.execute(select(ApiKey).where(ApiKey.key_id == key_id_str))
-                existing = result.scalar_one_or_none()
-                if existing:
-                    api_key_pk = existing.id
-                else:
-                    ak = ApiKey(provider=provider, key_id=key_id_str)
-                    session.add(ak)
-                    await session.flush()
-                    api_key_pk = ak.id
-
-            model_pk = None
-            if model_name and model_name != "unknown":
-                result = await session.execute(select(Model).where(Model.name == model_name))
-                existing = result.scalar_one_or_none()
-                if existing:
-                    model_pk = existing.id
-                else:
-                    m = Model(name=model_name, provider=provider)
-                    session.add(m)
-                    await session.flush()
-                    model_pk = m.id
-
-            req = Request(
-                api_key_id=api_key_pk,
-                model_id=model_pk,
-                provider=provider,
-                status_code=status_code,
-                latency_ms=latency_ms,
-                url_path="/test",
-                is_error=is_error,
-                prompt_tokens=prompt_tokens,
-                candidates_tokens=candidates_tokens,
-                total_tokens=total_tokens,
-            )
-            session.add(req)
-
-
 @pytest.mark.asyncio
 async def test_record_request_inserts_data(stats_service, db_session):
     """Test that record_request creates an api_key, model, and request row."""
-    # record_request uses pg_insert (PostgreSQL only), so we test via direct insert
-    await _insert_test_request(
-        db_session,
+    await stats_service.record_request(
         provider="gemini",
-        key_id_str="test-key-123",
-        model_name="gemini-pro",
+        model="gemini-pro",
+        key_id="test-key-123",
         status_code=200,
         latency_ms=500,
     )
@@ -118,12 +61,41 @@ async def test_record_request_inserts_data(stats_service, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_stats(stats_service, db_session):
+async def test_record_request_reuses_existing_key_and_model(stats_service, db_session):
+    """Test that record_request reuses existing api_key and model rows."""
+    await stats_service.record_request(
+        provider="gemini", model="gemini-pro", key_id="key-1",
+        status_code=200, latency_ms=100,
+    )
+    await stats_service.record_request(
+        provider="gemini", model="gemini-pro", key_id="key-1",
+        status_code=200, latency_ms=200,
+    )
+
+    async with db_session() as session:
+        result = await session.execute(select(Request))
+        assert len(result.scalars().all()) == 2
+
+        result = await session.execute(select(ApiKey))
+        assert len(result.scalars().all()) == 1
+
+        result = await session.execute(select(Model))
+        assert len(result.scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_stats(stats_service):
     """Test aggregated stats query."""
-    # Insert some test data
-    await _insert_test_request(db_session, status_code=200, latency_ms=100, is_error=False)
-    await _insert_test_request(db_session, status_code=200, latency_ms=200, is_error=False)
-    await _insert_test_request(db_session, status_code=500, latency_ms=300, is_error=True)
+    await stats_service.record_request(
+        provider="gemini", model="m", key_id="k", status_code=200, latency_ms=100,
+    )
+    await stats_service.record_request(
+        provider="gemini", model="m", key_id="k", status_code=200, latency_ms=200,
+    )
+    await stats_service.record_request(
+        provider="gemini", model="m", key_id="k", status_code=500, latency_ms=300,
+        is_error=True,
+    )
 
     stats = await stats_service.get_stats(hours=24)
 
@@ -134,10 +106,14 @@ async def test_get_stats(stats_service, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_stats_filters_by_provider(stats_service, db_session):
+async def test_get_stats_filters_by_provider(stats_service):
     """Test stats filtering by provider."""
-    await _insert_test_request(db_session, provider="gemini", status_code=200, latency_ms=100)
-    await _insert_test_request(db_session, provider="vertex", status_code=200, latency_ms=200)
+    await stats_service.record_request(
+        provider="gemini", model="m", key_id="k1", status_code=200, latency_ms=100,
+    )
+    await stats_service.record_request(
+        provider="vertex", model="m", key_id="k2", status_code=200, latency_ms=200,
+    )
 
     gemini_stats = await stats_service.get_stats(hours=24, provider="gemini")
     assert gemini_stats["total_requests"] == 1
@@ -156,17 +132,16 @@ async def test_get_stats_empty(stats_service):
 
 
 @pytest.mark.asyncio
-async def test_get_requests_log(stats_service, db_session):
+async def test_get_requests_log(stats_service):
     """Test request log with pagination."""
     for i in range(5):
-        await _insert_test_request(
-            db_session,
+        await stats_service.record_request(
             provider="gemini",
+            model="gemini-pro",
+            key_id=f"key-{i}",
             status_code=200 if i < 3 else 500,
             latency_ms=100 + i * 10,
             is_error=i >= 3,
-            key_id_str=f"key-{i}",
-            model_name="gemini-pro",
         )
 
     log = await stats_service.get_requests_log(limit=3, offset=0)
@@ -180,18 +155,21 @@ async def test_get_requests_log(stats_service, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_model_stats(stats_service, db_session):
+async def test_get_model_stats(stats_service):
     """Test per-model statistics."""
-    await _insert_test_request(
-        db_session, model_name="gemini-pro", latency_ms=100,
+    await stats_service.record_request(
+        provider="gemini", model="gemini-pro", key_id="k",
+        status_code=200, latency_ms=100,
         total_tokens=1000, prompt_tokens=500, candidates_tokens=500,
     )
-    await _insert_test_request(
-        db_session, model_name="gemini-pro", latency_ms=200,
+    await stats_service.record_request(
+        provider="gemini", model="gemini-pro", key_id="k",
+        status_code=200, latency_ms=200,
         total_tokens=2000, prompt_tokens=1000, candidates_tokens=1000,
     )
-    await _insert_test_request(
-        db_session, model_name="gemini-flash", latency_ms=50,
+    await stats_service.record_request(
+        provider="gemini", model="gemini-flash", key_id="k",
+        status_code=200, latency_ms=50,
         total_tokens=500, prompt_tokens=250, candidates_tokens=250,
     )
 
@@ -206,19 +184,15 @@ async def test_get_model_stats(stats_service, db_session):
 
 
 @pytest.mark.asyncio
-async def test_cleanup(stats_service, db_session):
+async def test_cleanup(stats_service):
     """Test that cleanup removes old records."""
-    # Insert a record (created_at defaults to now, so it should survive cleanup)
-    await _insert_test_request(db_session, status_code=200, latency_ms=100)
+    await stats_service.record_request(
+        provider="gemini", model="m", key_id="k", status_code=200, latency_ms=100,
+    )
 
-    # Cleanup records older than 30 days (should delete nothing)
+    # Cleanup records older than 30 days (should delete nothing since record is fresh)
     result = await stats_service.cleanup(days=30)
     assert result["deleted"] == 0
-
-    # Verify record still exists
-    async with db_session() as session:
-        count = await session.execute(select(Request))
-        assert len(count.scalars().all()) == 1
 
 
 @pytest.mark.asyncio

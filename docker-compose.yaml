@@ -1,7 +1,7 @@
 services:
-  orchestrator_2:
+  orchestrator:
     build: .
-    container_name: orchestrator_2
+    container_name: orchestrator
     restart: always
     ports:
       - "8000:8000"

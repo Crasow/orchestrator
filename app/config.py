@@ -58,6 +58,7 @@ class SecuritySettings(BaseSettings):
     admin_password_hash: str = ""
     # * means all IPs are allowed. Defaulting to * for better out-of-the-box Docker support.
     allowed_client_ips: list[str] = ["*"]
+    cors_origins: list[str] = ["*"]
 
     def __init__(self, **values):
         super().__init__(**values)
@@ -123,5 +124,7 @@ def ensure_directories():
             logger.error(f"Failed to create Gemini keys template {gemini_keys_file}: {e}")
             raise
 
-# --- Expose a single settings instance for convenience ---
+# Module-level convenience instance. Note: this is evaluated once at import time.
+# Tests that need different settings should call get_settings.cache_clear() before
+# importing modules that depend on this, and set env vars before that import.
 settings = get_settings()
