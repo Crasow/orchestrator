@@ -139,7 +139,7 @@ class StatsService:
                 }
         except Exception as e:
             logger.error(f"Failed to get stats: {e}")
-            return {"error": str(e)}
+            raise
 
     async def get_requests_log(
         self,
@@ -231,7 +231,7 @@ class StatsService:
                 }
         except Exception as e:
             logger.error(f"Failed to get requests log: {e}")
-            return {"error": str(e)}
+            raise
 
     async def get_model_stats(self, hours: int = 24) -> dict:
         try:
@@ -269,7 +269,7 @@ class StatsService:
                 }
         except Exception as e:
             logger.error(f"Failed to get model stats: {e}")
-            return {"error": str(e)}
+            raise
 
     async def get_token_stats(self, hours: int = 24, group_by: str = "hour") -> dict:
         try:
@@ -352,7 +352,7 @@ class StatsService:
                 }
         except Exception as e:
             logger.error(f"Failed to get token stats: {e}")
-            return {"error": str(e)}
+            raise
 
     async def cleanup(self, days: int = 30) -> dict:
         try:
@@ -364,7 +364,7 @@ class StatsService:
                     return {"deleted": result.rowcount, "older_than_days": days}
         except Exception as e:
             logger.error(f"Failed to cleanup stats: {e}")
-            return {"error": str(e)}
+            raise
 
 
 # Will be initialized in app lifespan

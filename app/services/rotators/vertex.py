@@ -29,7 +29,7 @@ class VertexRotator:
     def load_credentials(self):
         creds_dir = settings.paths.vertex_creds_dir
         files = glob.glob(os.path.join(creds_dir, "*.json"))
-        # Исключаем gemini_keys.json, если он лежит в той же папке
+        # Exclude gemini_keys.json if it's in the same directory
         files = [f for f in files if "gemini_keys" not in f]
 
         new_pool = []
@@ -43,7 +43,7 @@ class VertexRotator:
                 with open(fpath, "r") as f:
                     info = json.load(f)
 
-                # Простейшая проверка, что это Service Account
+                # Basic validation: must be a service account JSON
                 if "private_key" not in info or "project_id" not in info:
                     continue
 
@@ -67,9 +67,9 @@ class VertexRotator:
     def credential_count(self) -> int:
         return len(self._pool)
 
-    def get_next_credential(self) -> VertexCredential:
+    def get_next_credential(self) -> VertexCredential | None:
         if not self._pool:
-            raise RuntimeError("Vertex Credential pool is empty")
+            return None
         cred = self._pool[self._current_index]
         self._current_index = (self._current_index + 1) % len(self._pool)
         return cred
