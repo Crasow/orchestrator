@@ -19,6 +19,19 @@ router = APIRouter()
 PROJECT_PATH_REGEX = re.compile(r"(v1(?:beta\d+)?/projects/)([^/]+)(/locations.*)")
 
 
+def _get_client_ip(request: Request) -> str:
+    """Extract real client IP, respecting X-Forwarded-For behind a trusted proxy."""
+    if settings.security.trust_proxy_headers:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            # First IP in the chain is the original client
+            return forwarded.split(",")[0].strip()
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+    return getattr(request.client, "host", "unknown")
+
+
 def _extract_action(path: str) -> str | None:
     """Extract action from URL like 'models/gemini-pro:generateContent' -> 'generateContent'."""
     parts = path.split("/")
@@ -120,9 +133,12 @@ async def _record_stats(
     if response_body:
         tokens = _parse_usage_metadata(response_body)
 
-    # Parse request/response as JSON for storage
-    req_json = _safe_parse_json(request_body) if request_body else None
-    resp_json = _safe_parse_json(response_body) if response_body else None
+    # Parse request/response as JSON for storage (if enabled)
+    req_json = None
+    resp_json = None
+    if settings.services.store_request_bodies:
+        req_json = _safe_parse_json(request_body) if request_body else None
+        resp_json = _safe_parse_json(response_body) if response_body else None
 
     await svc.record_request(
         provider=provider,
@@ -148,31 +164,44 @@ async def _record_stats(
     )
 
 
-@router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-async def proxy_gateway(request: Request, path: str):
-    client_ip = getattr(request.client, "host", "unknown")
-
-    if settings.security.allowed_client_ips and settings.security.allowed_client_ips == ["*"]:
-        pass
-    elif settings.security.allowed_client_ips and client_ip not in settings.security.allowed_client_ips:
+def _check_ip_access(client_ip: str):
+    """Raise 403 if client IP is not in the whitelist."""
+    allowed = settings.security.allowed_client_ips
+    if allowed and allowed != ["*"] and client_ip not in allowed:
         logger.warning(f"Unauthorized access attempt from IP: {client_ip}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: Your IP address is not whitelisted.",
         )
 
-    is_gemini = "projects/" not in path
+
+@router.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+@router.api_route("/v1beta/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_gateway(request: Request, path: str):
+    # Reconstruct the full API path (v1/... or v1beta/...)
+    full_path = request.url.path.lstrip("/")
+
+    client_ip = _get_client_ip(request)
+    _check_ip_access(client_ip)
+
+    is_gemini = "projects/" not in full_path
     provider = "gemini" if is_gemini else "vertex"
-    model = _extract_model(path, is_gemini)
-    action = _extract_action(path)
+    model = _extract_model(full_path, is_gemini)
+    action = _extract_action(full_path)
     is_streaming = action == "streamGenerateContent"
     user_agent = request.headers.get("user-agent")
 
     body = await request.body()
 
-    headers = dict(request.headers)
-    for h in ["host", "content-length", "authorization", "x-goog-api-key"]:
-        headers.pop(h, None)
+    # Allowlist: only forward safe headers to upstream
+    _ALLOWED_HEADERS = {
+        "content-type", "accept", "accept-encoding", "accept-language",
+        "user-agent", "x-goog-user-project",
+    }
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() in _ALLOWED_HEADERS
+    }
 
     start_time = time.time()
     attempts = 0
@@ -187,7 +216,7 @@ async def proxy_gateway(request: Request, path: str):
         try:
             if is_gemini:
                 upstream_base = settings.services.gemini_base_url
-                target_path = path
+                target_path = full_path
 
                 api_key = state.gemini_rotator.get_next_key()
                 if not api_key:
@@ -196,7 +225,7 @@ async def proxy_gateway(request: Request, path: str):
                         _record_stats,
                         provider=provider, model=model, key_id="system",
                         status_code=503, latency_ms=latency_ms, action=action,
-                        http_method=request.method, url_path=path,
+                        http_method=request.method, url_path=full_path,
                         client_ip=client_ip, user_agent=user_agent,
                         attempt_count=attempts, request_body=body,
                         response_body=b"No Gemini keys available",
@@ -206,19 +235,32 @@ async def proxy_gateway(request: Request, path: str):
 
                 params = dict(request.query_params)
                 params["key"] = api_key
-                key_id = api_key
-                log_auth = f"Key ...{api_key[-4:]}"
+                key_id = f"...{api_key[-4:]}"
+                log_auth = f"Key {key_id}"
 
             else:
                 upstream_base = settings.services.vertex_base_url
                 cred = state.vertex_rotator.get_next_credential()
+                if not cred:
+                    latency_ms = int((time.time() - start_time) * 1000)
+                    bg = BackgroundTask(
+                        _record_stats,
+                        provider=provider, model=model, key_id="system",
+                        status_code=503, latency_ms=latency_ms, action=action,
+                        http_method=request.method, url_path=full_path,
+                        client_ip=client_ip, user_agent=user_agent,
+                        attempt_count=attempts, request_body=body,
+                        response_body=b"No Vertex credentials available",
+                        is_error=True, error_detail="No Vertex credentials available",
+                    )
+                    return Response("No Vertex credentials available", status_code=503, background=bg)
                 token = await state.vertex_rotator.get_token(cred)
 
-                match = PROJECT_PATH_REGEX.match(path)
+                match = PROJECT_PATH_REGEX.match(full_path)
                 target_path = (
                     f"{match.group(1)}{cred.project_id}{match.group(3)}"
                     if match
-                    else path
+                    else full_path
                 )
 
                 headers["Authorization"] = f"Bearer {token}"
@@ -248,20 +290,20 @@ async def proxy_gateway(request: Request, path: str):
 
                 # For streaming: collect chunks while forwarding to client
                 chunks: list[bytes] = []
+                stream_start = time.time()
 
                 async def stream_and_collect() -> AsyncIterator[bytes]:
                     async for chunk in resp.aiter_bytes():
                         chunks.append(chunk)
                         yield chunk
 
-                latency_ms = int((time.time() - start_time) * 1000)
-
                 async def record_streaming_stats():
+                    latency_ms = int((time.time() - start_time) * 1000)
                     full_body = b"".join(chunks)
                     await _record_stats(
                         provider=provider, model=model, key_id=key_id,
                         status_code=resp.status_code, latency_ms=latency_ms,
-                        action=action, http_method=request.method, url_path=path,
+                        action=action, http_method=request.method, url_path=full_path,
                         client_ip=client_ip, user_agent=user_agent,
                         attempt_count=attempts, request_body=body,
                         response_body=full_body,
@@ -294,7 +336,7 @@ async def proxy_gateway(request: Request, path: str):
                     _record_stats,
                     provider=provider, model=model, key_id=key_id,
                     status_code=resp.status_code, latency_ms=latency_ms,
-                    action=action, http_method=request.method, url_path=path,
+                    action=action, http_method=request.method, url_path=full_path,
                     client_ip=client_ip, user_agent=user_agent,
                     attempt_count=attempts, request_body=body,
                     response_body=resp_body,
@@ -314,6 +356,8 @@ async def proxy_gateway(request: Request, path: str):
                     background=bg,
                 )
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Proxy error: {e}")
             final_error = str(e)
@@ -328,7 +372,7 @@ async def proxy_gateway(request: Request, path: str):
         _record_stats,
         provider=provider, model=model, key_id=final_key_id,
         status_code=503, latency_ms=latency_ms, action=action,
-        http_method=request.method, url_path=path,
+        http_method=request.method, url_path=full_path,
         client_ip=client_ip, user_agent=user_agent,
         attempt_count=attempts, request_body=body,
         response_body=error_msg.encode(),
