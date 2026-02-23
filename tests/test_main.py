@@ -14,7 +14,9 @@ def client(mock_env):
     with patch("app.db.engine.create_async_engine") as mock_engine, \
          patch("app.main.async_engine") as mock_main_engine, \
          patch("app.main.async_session_factory"), \
-         patch("app.main.Base"):
+         patch("app.main.Base"), \
+         patch("app.main.GeminiRotator") as mock_gemini_cls, \
+         patch("app.main.VertexRotator") as mock_vertex_cls:
         mock_conn = AsyncMock()
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
@@ -29,6 +31,17 @@ def client(mock_env):
         mock_connect_ctx.__aexit__ = AsyncMock(return_value=None)
         mock_main_engine.connect.return_value = mock_connect_ctx
 
+        # Mock rotators created in lifespan
+        mock_gemini = MagicMock()
+        mock_gemini.key_count = 0
+        mock_gemini.keys = []
+        mock_gemini_cls.return_value = mock_gemini
+
+        mock_vertex = MagicMock()
+        mock_vertex.credential_count = 0
+        mock_vertex.credentials = []
+        mock_vertex_cls.return_value = mock_vertex
+
         from app.main import app
         with TestClient(app) as c:
             yield c
@@ -36,13 +49,15 @@ def client(mock_env):
 
 @pytest.fixture
 def admin_auth(monkeypatch):
-    """Sets up admin credentials in env vars and returns valid headers."""
+    """Sets up admin credentials and returns valid login payload."""
     from app.security.auth import auth_manager
+    from app.config import settings
+
     password = "secret-password"
     pw_hash = auth_manager.hash_password(password)
 
-    monkeypatch.setenv("ADMIN_USERNAME", "admin")
-    monkeypatch.setenv("ADMIN_PASSWORD_HASH", pw_hash)
+    monkeypatch.setattr(settings.security, "admin_username", "admin")
+    monkeypatch.setattr(settings.security, "admin_password_hash", pw_hash)
 
     return {"username": "admin", "password": password}
 

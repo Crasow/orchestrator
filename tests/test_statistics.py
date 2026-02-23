@@ -9,16 +9,10 @@ from app.db.models import Base, ApiKey, Model, Request
 from app.services.statistics import StatsService
 
 
+# Re-use async_db_session from conftest.py as db_session
 @pytest.fixture
-async def db_session():
-    """In-memory SQLite session factory for tests."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
+def db_session(async_db_session):
+    return async_db_session
 
 
 @pytest.fixture
