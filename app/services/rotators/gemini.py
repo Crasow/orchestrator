@@ -26,9 +26,9 @@ class GeminiRotator:
             with open(filepath, "r") as f:
                 data = json.load(f)
 
-            # Проверяем, зашифрованы ли данные
+            # Check if data is encrypted
             if isinstance(data, dict) and "encrypted_keys" in data:
-                # Расшифровываем ключи
+                # Decrypt keys
                 encrypted_keys = data["encrypted_keys"]
                 if isinstance(encrypted_keys, list):
                     self._keys = []
@@ -44,7 +44,7 @@ class GeminiRotator:
                 else:
                     logger.error("Encrypted Gemini keys file format error")
             elif isinstance(data, list):
-                # Незащищённый формат - для обратной совместимости
+                # Unencrypted format — backwards compatibility
                 self._keys = [k for k in data if isinstance(k, str) and k.strip()]
                 logger.warning(
                     f"Loaded {len(self._keys)} unencrypted Gemini keys. Consider encrypting them."
