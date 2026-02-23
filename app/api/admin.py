@@ -145,7 +145,7 @@ async def admin_login(request: Request, body: LoginRequest):
             max_age=COOKIE_MAX_AGE,
             httponly=True,
             samesite="lax",
-            secure=False,  # set True behind HTTPS reverse proxy
+            secure=settings.security.cookie_secure,
             path="/",
         )
         return response

@@ -22,7 +22,7 @@ class AuthManager:
         self._lockout_duration = int(os.environ.get("LOCKOUT_DURATION_MINUTES", "15"))
 
     def _get_or_create_secret_key(self) -> str:
-        """Получает или создаёт секретный ключ для JWT."""
+        """Get or create the JWT secret key."""
         key_file = os.environ.get("JWT_SECRET_FILE", "/app/secrets/jwt_secret.key")
 
         if os.path.exists(key_file):
@@ -32,13 +32,13 @@ class AuthManager:
             except Exception as e:
                 logger.error(f"Failed to read JWT secret: {e}")
 
-        # Создаём новый ключ
+        # Generate new key
         secret_key = secrets.token_urlsafe(64)
         try:
             os.makedirs(os.path.dirname(key_file), exist_ok=True)
             with open(key_file, "w") as f:
                 f.write(secret_key)
-            os.chmod(key_file, 0o600)  # Только для владельца
+            os.chmod(key_file, 0o600)  # Owner only
             logger.info(f"Created new JWT secret at {key_file}")
         except Exception as e:
             logger.warning(f"Failed to save JWT secret: {e}")
@@ -46,7 +46,7 @@ class AuthManager:
         return secret_key
 
     def hash_password(self, password: str) -> str:
-        """Хеширует пароль."""
+        """Hash a password with PBKDF2-SHA256."""
         salt = secrets.token_hex(16)
         password_hash = hashlib.pbkdf2_hmac(
             "sha256", password.encode(), salt.encode(), 100000
@@ -54,7 +54,7 @@ class AuthManager:
         return f"pbkdf2_sha256${salt}${password_hash.hex()}"
 
     def verify_password(self, password: str, hashed: str) -> bool:
-        """Проверяет пароль."""
+        """Verify a password against its hash."""
         try:
             algorithm, salt, hash_value = hashed.split("$")
             if algorithm != "pbkdf2_sha256":
@@ -68,7 +68,7 @@ class AuthManager:
             return False
 
     def create_access_token(self, data: Dict[str, Any]) -> str:
-        """Создаёт JWT токен."""
+        """Create a JWT access token."""
         to_encode = data.copy()
         expire = datetime.now(timezone.utc) + timedelta(
             minutes=self._token_expire_minutes
@@ -79,7 +79,7 @@ class AuthManager:
         return encoded_jwt
 
     def verify_token(self, token: str) -> Dict[str, Any]:
-        """Проверяет JWT токен."""
+        """Verify and decode a JWT token."""
         try:
             payload = jwt.decode(token, self._secret_key, algorithms=[self._algorithm])
             return payload
@@ -93,7 +93,7 @@ class AuthManager:
             )
 
     def is_account_locked(self, identifier: str) -> bool:
-        """Проверяет, заблокирован ли аккаунт."""
+        """Check if account is locked due to failed attempts."""
         if identifier not in self._failed_attempts:
             return False
 
@@ -103,13 +103,13 @@ class AuthManager:
             if time.time() - last_attempt < self._lockout_duration * 60:
                 return True
             else:
-                # Сбрасываем счётчик после истечения блокировки
+                # Reset counter after lockout expires
                 del self._failed_attempts[identifier]
 
         return False
 
     def record_failed_attempt(self, identifier: str):
-        """Записывает неудачную попытку входа."""
+        """Record a failed login attempt."""
         if identifier not in self._failed_attempts:
             self._failed_attempts[identifier] = []
 
@@ -118,7 +118,7 @@ class AuthManager:
             f"Failed login attempt for {identifier}. Total: {len(self._failed_attempts[identifier])}"
         )
 
-        # Удаляем старые попытки
+        # Prune old attempts
         cutoff_time = time.time() - self._lockout_duration * 60
         self._failed_attempts[identifier] = [
             attempt
@@ -127,17 +127,19 @@ class AuthManager:
         ]
 
     def clear_failed_attempts(self, identifier: str):
-        """Очищает неудачные попытки входа."""
+        """Clear failed login attempts for an identifier."""
         if identifier in self._failed_attempts:
             del self._failed_attempts[identifier]
 
     def get_admin_credentials(self) -> Optional[tuple]:
-        """Получает учётные данные администратора."""
-        username = os.environ.get("ADMIN_USERNAME")
-        password_hash = os.environ.get("ADMIN_PASSWORD_HASH")
+        """Get admin credentials from application settings."""
+        from app.config import settings
+
+        username = settings.security.admin_username
+        password_hash = settings.security.admin_password_hash
 
         if not username or not password_hash:
-            logger.error("Admin credentials not configured")
+            logger.error("Admin credentials not configured (set SECURITY__ADMIN_USERNAME and SECURITY__ADMIN_PASSWORD_HASH)")
             return None
 
         return username, password_hash
@@ -145,8 +147,8 @@ class AuthManager:
     def authenticate_admin(
         self, username: str, password: str, client_ip: str
     ) -> Optional[str]:
-        """Аутентифицирует администратора."""
-        # Проверяем блокировку
+        """Authenticate admin user and return a JWT token."""
+        # Check lockout
         if self.is_account_locked(f"{username}@{client_ip}"):
             raise HTTPException(
                 status_code=status.HTTP_423_LOCKED,
@@ -174,16 +176,16 @@ class AuthManager:
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
             )
 
-        # Успешная аутентификация
+        # Successful authentication
         self.clear_failed_attempts(f"{username}@{client_ip}")
 
-        # Создаём токен
+        # Create token
         token = self.create_access_token(
             {
                 "sub": username,
                 "role": "admin",
                 "ip": client_ip,
-                "iat": datetime.now(timezone.utc),
+                "iat": int(datetime.now(timezone.utc).timestamp()),
             }
         )
 
@@ -191,7 +193,7 @@ class AuthManager:
         return token
 
     def _extract_token(self, request: Request) -> str:
-        """Извлекает JWT токен: сначала из cookie, потом из Authorization заголовка."""
+        """Extract JWT token from cookie first, then from Authorization header."""
         # 1. Cookie
         token = request.cookies.get("access_token")
         if token:
@@ -208,7 +210,7 @@ class AuthManager:
         )
 
     async def verify_admin_token(self, request: Request) -> Dict[str, Any]:
-        """Проверяет админский токен из cookie или заголовка."""
+        """Verify admin token from cookie or header."""
         try:
             token = self._extract_token(request)
             payload = self.verify_token(token)
@@ -239,10 +241,10 @@ class AuthManager:
             )
 
 
-# Глобальный экземпляр для использования в приложении
+# Global singleton
 auth_manager = AuthManager()
 
 
 async def get_current_admin(request: Request):
-    """Зависимость для получения текущего администратора."""
+    """FastAPI dependency that verifies admin authentication."""
     return await auth_manager.verify_admin_token(request)
