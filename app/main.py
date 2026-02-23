@@ -12,6 +12,8 @@ from app.api import admin, proxy
 from app.db import async_engine, async_session_factory, Base
 from app.services import statistics
 from app.services.statistics import StatsService
+from app.services.rotators.gemini import GeminiRotator
+from app.services.rotators.vertex import VertexRotator
 
 # --- LOGGING ---
 setup_logging()
@@ -27,6 +29,10 @@ async def lifespan(app: FastAPI):
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables ready")
+
+    # Init rotators (after ensure_directories so credential dirs exist)
+    state.gemini_rotator = GeminiRotator()
+    state.vertex_rotator = VertexRotator()
 
     # Init stats service
     statistics.stats_service = StatsService(async_session_factory)
@@ -75,11 +81,22 @@ async def health_check():
     except Exception:
         pass
 
+    gemini_keys = state.gemini_rotator.key_count if state.gemini_rotator else 0
+    vertex_creds = state.vertex_rotator.credential_count if state.vertex_rotator else 0
+    has_keys = gemini_keys > 0 or vertex_creds > 0
+
+    if db_ok and has_keys:
+        health_status = "healthy"
+    elif db_ok:
+        health_status = "degraded"  # DB ok but no keys loaded
+    else:
+        health_status = "unhealthy"
+
     return {
-        "status": "healthy" if db_ok else "degraded",
+        "status": health_status,
         "database": "connected" if db_ok else "unavailable",
-        "gemini_keys": state.gemini_rotator.key_count,
-        "vertex_credentials": state.vertex_rotator.credential_count,
+        "gemini_keys": gemini_keys,
+        "vertex_credentials": vertex_creds,
     }
 
 # --- ROUTERS ---

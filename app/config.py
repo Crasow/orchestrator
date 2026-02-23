@@ -49,16 +49,19 @@ class ServiceSettings(BaseSettings):
     max_retries: int = 10
     database_url: str = "postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator"
     stats_retention_days: int = 30
+    store_request_bodies: bool = False
 
 
 class SecuritySettings(BaseSettings):
     """Security-related settings, including secrets and access controls."""
-    admin_secret: str = Field("super-secret-key-123", min_length=16)
+    admin_secret: str = Field("change-me-to-a-random-string", min_length=16)
     admin_username: str = "admin"
     admin_password_hash: str = ""
     # * means all IPs are allowed. Defaulting to * for better out-of-the-box Docker support.
     allowed_client_ips: list[str] = ["*"]
     cors_origins: list[str] = ["*"]
+    trust_proxy_headers: bool = False
+    cookie_secure: bool = False
 
     def __init__(self, **values):
         super().__init__(**values)
