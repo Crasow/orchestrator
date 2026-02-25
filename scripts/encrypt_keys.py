@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Утилита для шифрования существующих API ключей.
-Использование: python encrypt_keys.py
+Utility to encrypt existing API keys.
+Usage: python scripts/encrypt_keys.py
 """
 
 import os
@@ -9,16 +9,16 @@ import json
 import sys
 from pathlib import Path
 
-# Добавляем путь к app директории
-sys.path.append(str(Path(__file__).parent / "app"))
+# Add project root to path so `app` package is importable
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from app import config
+from app.config import settings
 from app.security.encryption import encryption_manager
 
 
 def encrypt_gemini_keys():
-    """Шифрует существующие Gemini API ключи."""
-    input_file = config.GEMINI_CREDS_DIR
+    """Encrypt existing Gemini API keys in-place."""
+    input_file = settings.paths.gemini_keys_file
 
     if not os.path.exists(input_file):
         print(f"Gemini keys file not found: {input_file}")
@@ -28,7 +28,7 @@ def encrypt_gemini_keys():
         with open(input_file, "r") as f:
             data = json.load(f)
 
-        # Проверяем, уже зашифрованы ли ключи
+        # Check if keys are already encrypted
         if isinstance(data, dict) and "encrypted_keys" in data:
             print("Keys are already encrypted.")
             return
@@ -37,14 +37,14 @@ def encrypt_gemini_keys():
             print("Invalid format: expected list of strings")
             return
 
-        # Шифруем ключи
+        # Encrypt keys
         encrypted_keys = []
         for key in data:
             if isinstance(key, str) and key.strip():
                 encrypted_key = encryption_manager.encrypt_data(key.strip())
                 encrypted_keys.append(encrypted_key)
 
-        # Сохраняем в новом формате
+        # Save in encrypted format
         encrypted_data = {
             "encrypted_keys": encrypted_keys,
             "metadata": {
@@ -54,13 +54,13 @@ def encrypt_gemini_keys():
             },
         }
 
-        # Создаём бэкап
+        # Create backup
         backup_file = f"{input_file}.backup"
         with open(backup_file, "w") as f:
             json.dump(data, f, indent=2)
         print(f"Created backup: {backup_file}")
 
-        # Сохраняем зашифрованные данные
+        # Write encrypted data
         with open(input_file, "w") as f:
             json.dump(encrypted_data, f, indent=2)
 

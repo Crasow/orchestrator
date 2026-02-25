@@ -3,6 +3,7 @@ credentials/
 secrets/
 .env
 .env.*
+!.env.example
 
 # --- Python ---
 __pycache__/
@@ -34,10 +35,13 @@ htmlcov/
 .ruff_cache/
 postman_examples.txt
 
-integration_results/
+tests/integration_results/
 demo_results/
+redis_data/
 nul
 old_tests
+output_*.png
+variation_result_*.png
 
 # --- OS Files ---
 .DS_Store
@@ -46,3 +50,5 @@ Thumbs.db
 # --- Custom Test Results ---
 tests/custom/results.json
 tests/custom/admin_results.json
+
+AUDIT_PLAN.md

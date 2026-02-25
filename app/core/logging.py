@@ -3,7 +3,7 @@ import sys
 import colorlog
 
 def setup_logging():
-    # Цветовая схема
+    # Color scheme
     log_colors = {
         'DEBUG': 'cyan',
         'INFO': 'green',
@@ -12,8 +12,7 @@ def setup_logging():
         'CRITICAL': 'red,bg_white',
     }
     
-    # Формат логов: ЦВЕТ | ВРЕМЯ | УРОВЕНЬ | ИМЯ | СООБЩЕНИЕ
-    # Исправлен формат даты: %m вместо %м
+    # Log format: COLOR | TIME | LEVEL | NAME | MESSAGE
     formatter = colorlog.ColoredFormatter(
         "%(log_color)s%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -22,19 +21,19 @@ def setup_logging():
         style='%'
     )
 
-    # Используем stdout, чтобы Docker корректно ловил логи
+    # Use stdout so Docker captures logs correctly
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(formatter)
 
-    # Настраиваем корневой логгер
+    # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     
-    # Очищаем существующие хендлеры (чтобы не было дублей от uvicorn)
+    # Clear existing handlers to avoid duplicates from uvicorn
     root_logger.handlers = []
     root_logger.addHandler(handler)
 
-    # Перехватываем логгеры Uvicorn для единого стиля
+    # Override Uvicorn loggers for consistent formatting
     for logger_name in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
         logger = logging.getLogger(logger_name)
         logger.handlers = [] # Удаляем дефолтные хендлеры uvicorn

@@ -1,6 +1,5 @@
 import pytest
 import os
-import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,11 +23,8 @@ def mock_env(monkeypatch, tmp_path):
     for var in vars_to_clear:
         monkeypatch.delenv(var, raising=False)
 
-    env_file = Path(".env")
-    renamed_env = False
-    if env_file.exists():
-        env_file.rename(".env.test_backup")
-        renamed_env = True
+    # Use tmp_path as working directory so pydantic-settings won't find the real .env
+    monkeypatch.chdir(tmp_path)
 
     monkeypatch.setenv("ENCRYPTION_KEY_FILE", str(secrets_dir / "master.key"))
     monkeypatch.setenv("SECURITY__ADMIN_SECRET", "test-secret-key-123456")
@@ -37,9 +33,6 @@ def mock_env(monkeypatch, tmp_path):
     monkeypatch.setenv("SERVICES__DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
     yield tmp_path
-
-    if renamed_env:
-        Path(".env.test_backup").rename(".env")
 
 
 @pytest.fixture

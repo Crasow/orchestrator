@@ -8,7 +8,6 @@ dependencies = [
     "fastapi>=0.128.0",
     "google-auth>=2.47.0",
     "httpx>=0.28.1",
-    "pillow>=10.0.0",
     "requests>=2.32.5",
     "uvicorn>=0.40.0",
     "cryptography>=41.0.0",
@@ -19,15 +18,16 @@ dependencies = [
     "asyncpg>=0.29.0",
     "alembic>=1.13.0",
     "sqlalchemy[asyncio]>=2.0.46",
+    "google-genai>=1.64.0",
 ]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra --strict-markers --strict-config --cov=app --cov-report=term-missing --cov-report=html --cov-report=xml"
+addopts = "-ra --strict-markers --strict-config -m 'not integration' --cov=app --cov-report=term-missing --cov-report=html --cov-report=xml"
 pythonpath = "."
 testpaths = ["tests"]
-norecursedirs = ["tests/old_tests"]
-python_files = ["test_*.py", "*_test.py"]
+norecursedirs = ["tests/old_tests", "tests/custom", "scripts"]
+python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
@@ -48,5 +48,6 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
     "aiosqlite>=0.20.0",
+    "pillow>=10.0.0",
 ]
 
