@@ -14,6 +14,7 @@ from app.services import statistics
 from app.services.statistics import StatsService
 from app.services.rotators.gemini import GeminiRotator
 from app.services.rotators.vertex import VertexRotator
+from app.services.rate_limiter import KeyRateLimiter
 
 # --- LOGGING ---
 setup_logging()
@@ -33,6 +34,15 @@ async def lifespan(app: FastAPI):
     # Init rotators (after ensure_directories so credential dirs exist)
     state.gemini_rotator = GeminiRotator()
     state.vertex_rotator = VertexRotator()
+
+    # Init rate limiters
+    concurrency = settings.services.key_concurrency
+    state.gemini_rate_limiter = KeyRateLimiter(concurrency=concurrency)
+    for key in state.gemini_rotator.keys:
+        state.gemini_rate_limiter.register_key(key)
+    state.vertex_rate_limiter = KeyRateLimiter(concurrency=concurrency)
+    for cred in state.vertex_rotator.credentials:
+        state.vertex_rate_limiter.register_key(cred.project_id)
 
     # Init stats service
     statistics.stats_service = StatsService(async_session_factory)

@@ -1,10 +1,15 @@
 import os
 import json
 import logging
-from typing import List, Optional
+from __future__ import annotations
+
+from typing import List, Optional, TYPE_CHECKING
 
 from app.config import settings
 from app.security.encryption import encryption_manager
+
+if TYPE_CHECKING:
+    from app.services.rate_limiter import KeyRateLimiter
 
 logger = logging.getLogger("orchestrator.gemini")
 
@@ -70,6 +75,18 @@ class GeminiRotator:
         key = self._keys[self._current_index]
         self._current_index = (self._current_index + 1) % len(self._keys)
         return key
+
+    def get_next_available_key(self, rate_limiter: KeyRateLimiter) -> Optional[str]:
+        """Return next key that is not disabled, or None if all disabled."""
+        if not self._keys:
+            return None
+        total = len(self._keys)
+        for _ in range(total):
+            key = self._keys[self._current_index]
+            self._current_index = (self._current_index + 1) % total
+            if rate_limiter.is_available(key):
+                return key
+        return None
 
     def reload(self):
         self.load_keys()

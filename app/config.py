@@ -50,6 +50,8 @@ class ServiceSettings(BaseSettings):
     database_url: str = "postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator"
     stats_retention_days: int = 30
     store_request_bodies: bool = False
+    key_concurrency: int = 1
+    backoff_disable_threshold: int = 90
 
 
 class SecuritySettings(BaseSettings):

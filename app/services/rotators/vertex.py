@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import os
 import glob
 import json
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
 from app.config import settings
+
+if TYPE_CHECKING:
+    from app.services.rate_limiter import KeyRateLimiter
 
 logger = logging.getLogger("orchestrator.vertex")
 
@@ -73,6 +78,18 @@ class VertexRotator:
         cred = self._pool[self._current_index]
         self._current_index = (self._current_index + 1) % len(self._pool)
         return cred
+
+    def get_next_available_credential(self, rate_limiter: KeyRateLimiter) -> Optional[VertexCredential]:
+        """Return next credential that is not disabled, or None if all disabled."""
+        if not self._pool:
+            return None
+        total = len(self._pool)
+        for _ in range(total):
+            cred = self._pool[self._current_index]
+            self._current_index = (self._current_index + 1) % total
+            if rate_limiter.is_available(cred.project_id):
+                return cred
+        return None
 
     async def get_token(self, cred_wrapper: VertexCredential) -> str:
         creds = cred_wrapper.creds
