@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import os
 import json
 import logging
-from __future__ import annotations
 
 from typing import List, Optional, TYPE_CHECKING
 

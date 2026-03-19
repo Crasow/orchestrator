@@ -38,7 +38,7 @@ orchestrator appends one automatically.
 ### Text generation
 
 ```http
-POST /v1beta/models/gemini-2.0-flash:generateContent
+POST /v1beta/models/gemini-2.5-flash:generateContent
 Content-Type: application/json
 
 {
@@ -60,7 +60,7 @@ Content-Type: application/json
 ### Streaming
 
 ```http
-POST /v1beta/models/gemini-2.0-flash:streamGenerateContent
+POST /v1beta/models/gemini-2.5-flash:streamGenerateContent
 Content-Type: application/json
 
 {
@@ -83,7 +83,7 @@ GET /v1beta/models
 ### Multi-turn chat
 
 ```http
-POST /v1beta/models/gemini-2.0-flash:generateContent
+POST /v1beta/models/gemini-2.5-flash:generateContent
 Content-Type: application/json
 
 {
@@ -106,7 +106,7 @@ rotated service account and injects the Bearer token.
 ### Text generation (Gemini via Vertex)
 
 ```http
-POST /v1/projects/ANY/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent
+POST /v1/projects/ANY/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent
 Content-Type: application/json
 
 {
@@ -156,7 +156,7 @@ Content-Type: application/json
 ### Streaming (Vertex)
 
 ```http
-POST /v1/projects/ANY/locations/us-central1/publishers/google/models/gemini-2.0-flash:streamGenerateContent
+POST /v1/projects/ANY/locations/us-central1/publishers/google/models/gemini-2.5-flash:streamGenerateContent
 Content-Type: application/json
 
 {
@@ -398,6 +398,200 @@ Use `index` (for Gemini) or `project_id` (for Vertex) as `identifier` in `/test-
 
 ---
 
+### GET `/admin/keys/gemini`
+
+**Auth required.** List all Gemini API keys (masked).
+
+**Response (200):**
+```json
+[
+  { "index": 0, "mask": "...aB1c" },
+  { "index": 1, "mask": "...xY2z" }
+]
+```
+
+---
+
+### POST `/admin/keys/gemini`
+
+**Auth required.** Add one or more Gemini API keys. Keys are appended to the existing file and the rotator is reloaded automatically.
+
+**Request:**
+```json
+{
+  "keys": ["AIzaSyNew1...", "AIzaSyNew2..."]
+}
+```
+
+**Success (201):**
+```json
+{
+  "added": 2,
+  "total": 5
+}
+```
+
+**Errors:**
+
+| Code | Body | Meaning |
+|------|------|---------|
+| 409 | `{"detail": "2 duplicate key(s) rejected"}` | One or more keys already exist |
+| 422 | `{"detail": "Keys must not be empty or whitespace-only"}` | Empty or blank key in the list |
+
+---
+
+### PUT `/admin/keys/gemini/{index}`
+
+**Auth required.** Replace a Gemini API key at the given index.
+
+**Request:**
+```json
+{
+  "key": "AIzaSyReplaced..."
+}
+```
+
+**Success (200):**
+```json
+{
+  "updated": 0,
+  "mask": "...ed1x"
+}
+```
+
+**Errors:**
+
+| Code | Body | Meaning |
+|------|------|---------|
+| 404 | `{"detail": "Index 5 out of range (0..2)"}` | Index does not exist |
+| 409 | `{"detail": "Duplicate key"}` | Key already exists at another index |
+| 422 | `{"detail": "Key must not be empty"}` | Empty key |
+
+---
+
+### DELETE `/admin/keys/gemini/{index}`
+
+**Auth required.** Remove a Gemini API key at the given index. Indices of subsequent keys shift down.
+
+**Success (200):**
+```json
+{
+  "deleted": 1,
+  "remaining": 4
+}
+```
+
+**Errors:**
+
+| Code | Body | Meaning |
+|------|------|---------|
+| 404 | `{"detail": "Index 5 out of range (0..2)"}` | Index does not exist |
+
+---
+
+### GET `/admin/keys/vertex`
+
+**Auth required.** List all Vertex service account credentials.
+
+**Response (200):**
+```json
+[
+  { "project_id": "my-project-123", "filename": "project-a-sa.json" },
+  { "project_id": "my-project-456", "filename": "project-b-sa.json" }
+]
+```
+
+---
+
+### POST `/admin/keys/vertex`
+
+**Auth required.** Upload a new Vertex service account JSON file. The file is written to the credentials directory and the rotator is reloaded.
+
+**Request:**
+```json
+{
+  "filename": "new-project-sa.json",
+  "credential": {
+    "type": "service_account",
+    "project_id": "new-project-789",
+    "private_key": "-----BEGIN RSA PRIVATE KEY-----\n...",
+    "client_email": "sa@new-project-789.iam.gserviceaccount.com",
+    "...": "..."
+  }
+}
+```
+
+`filename` must match `^[\w\-\.]+\.json$` (alphanumeric, hyphens, dots, ending with `.json`).
+
+**Success (201):**
+```json
+{
+  "added": "new-project-sa.json",
+  "project_id": "new-project-789"
+}
+```
+
+**Errors:**
+
+| Code | Body | Meaning |
+|------|------|---------|
+| 409 | `{"detail": "File 'name.json' already exists"}` | A file with that name already exists on disk |
+| 409 | `{"detail": "Project ID 'xxx' already loaded"}` | A credential with that project_id is already loaded |
+| 422 | `{"detail": "Credential must contain 'private_key' and 'project_id'"}` | Missing required fields |
+
+---
+
+### PUT `/admin/keys/vertex/{project_id}`
+
+**Auth required.** Replace a Vertex service account by project_id. Overwrites the existing file on disk.
+
+**Request:**
+```json
+{
+  "credential": {
+    "type": "service_account",
+    "project_id": "my-project-123",
+    "private_key": "-----BEGIN RSA PRIVATE KEY-----\n...",
+    "...": "..."
+  }
+}
+```
+
+**Success (200):**
+```json
+{
+  "updated": "my-project-123"
+}
+```
+
+**Errors:**
+
+| Code | Body | Meaning |
+|------|------|---------|
+| 404 | `{"detail": "Project ID 'xxx' not found"}` | No credential with that project_id |
+| 422 | `{"detail": "Credential must contain 'private_key' and 'project_id'"}` | Missing required fields |
+
+---
+
+### DELETE `/admin/keys/vertex/{project_id}`
+
+**Auth required.** Remove a Vertex service account by project_id. Deletes the file from disk.
+
+**Success (200):**
+```json
+{
+  "deleted": "my-project-123"
+}
+```
+
+**Errors:**
+
+| Code | Body | Meaning |
+|------|------|---------|
+| 404 | `{"detail": "Project ID 'xxx' not found"}` | No credential with that project_id |
+
+---
+
 ### POST `/admin/test-provider`
 
 **Auth required.** Test a single key/credential against one model.
@@ -408,7 +602,7 @@ Use `index` (for Gemini) or `project_id` (for Vertex) as `identifier` in `/test-
   "provider": "gemini",
   "identifier": 0,
   "model": {
-    "name": "models/gemini-2.0-flash",
+    "name": "models/gemini-2.5-flash",
     "supportedGenerationMethods": ["generateContent"]
   }
 }
@@ -420,7 +614,7 @@ Use `index` (for Gemini) or `project_id` (for Vertex) as `identifier` in `/test-
   "provider": "vertex",
   "identifier": "my-project-123",
   "model": {
-    "name": "models/gemini-2.0-flash",
+    "name": "models/gemini-2.5-flash",
     "supportedGenerationMethods": ["generateContent"]
   }
 }
@@ -434,7 +628,7 @@ Use `index` (for Gemini) or `project_id` (for Vertex) as `identifier` in `/test-
 **Response (200):**
 ```json
 {
-  "model": "models/gemini-2.0-flash",
+  "model": "models/gemini-2.5-flash",
   "status": "working",
   "code": 200,
   "error": null
@@ -459,7 +653,7 @@ Runs concurrently (max 10 parallel, 10s timeout per test).
 {
   "models": [
     {
-      "name": "models/gemini-2.0-flash",
+      "name": "models/gemini-2.5-flash",
       "supportedGenerationMethods": ["generateContent"]
     },
     {
@@ -475,14 +669,14 @@ Runs concurrently (max 10 parallel, 10s timeout per test).
 {
   "gemini": {
     "...aB1c": [
-      { "model": "models/gemini-2.0-flash", "status": "working", "code": 200, "error": null },
+      { "model": "models/gemini-2.5-flash", "status": "working", "code": 200, "error": null },
       { "model": "models/imagen-3.0-generate-001", "status": "error", "code": 404, "error": {...} }
     ],
     "...xY2z": [...]
   },
   "vertex": {
     "my-project-123": [
-      { "model": "models/gemini-2.0-flash", "status": "working", "code": 200, "error": null }
+      { "model": "models/gemini-2.5-flash", "status": "working", "code": 200, "error": null }
     ]
   }
 }
@@ -524,7 +718,7 @@ Runs concurrently (max 10 parallel, 10s timeout per test).
 |-------|------|---------|-------------|
 | `limit` | int (1–500) | 50 | Page size |
 | `offset` | int (>=0) | 0 | Skip N records |
-| `model` | string | — | Filter by model name (e.g. `"gemini-2.0-flash"`) |
+| `model` | string | — | Filter by model name (e.g. `"gemini-2.5-flash"`) |
 | `provider` | string | — | Filter: `"gemini"` or `"vertex"` |
 | `errors_only` | bool | false | Only show failed requests |
 
@@ -539,10 +733,10 @@ Runs concurrently (max 10 parallel, 10s timeout per test).
       "id": 1520,
       "provider": "gemini",
       "api_key": "...aB1c",
-      "model": "gemini-2.0-flash",
+      "model": "gemini-2.5-flash",
       "action": "generateContent",
       "http_method": "POST",
-      "url_path": "v1beta/models/gemini-2.0-flash:generateContent",
+      "url_path": "v1beta/models/gemini-2.5-flash:generateContent",
       "client_ip": "10.0.0.5",
       "status_code": 200,
       "latency_ms": 450,
@@ -576,7 +770,7 @@ Runs concurrently (max 10 parallel, 10s timeout per test).
   "period_hours": 24,
   "models": [
     {
-      "name": "gemini-2.0-flash",
+      "name": "gemini-2.5-flash",
       "provider": "gemini",
       "total_requests": 800,
       "total_errors": 5,
@@ -617,7 +811,7 @@ Runs concurrently (max 10 parallel, 10s timeout per test).
 
 `group` value depends on `group_by`:
 - `hour` / `day` → ISO datetime string
-- `model` → model name (e.g. `"gemini-2.0-flash"`)
+- `model` → model name (e.g. `"gemini-2.5-flash"`)
 - `key` → masked key ID (e.g. `"...aB1c"`) or project ID
 
 ---

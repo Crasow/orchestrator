@@ -1,5 +1,9 @@
 import logging
 import asyncio
+import json
+import os
+import tempfile
+from os.path import basename
 from typing import Any
 
 from fastapi import APIRouter, Request, Depends, HTTPException, Query
@@ -8,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.core import state
 from app.security.auth import auth_manager, get_current_admin
+from app.security.encryption import encryption_manager
 from app.services import statistics
 from app.config import settings
 
@@ -40,6 +45,23 @@ class CheckKeysRequest(BaseModel):
     models: list[ModelInfo] = Field(min_length=1)
 
 
+class AddGeminiKeysRequest(BaseModel):
+    keys: list[str] = Field(min_length=1)
+
+
+class UpdateGeminiKeyRequest(BaseModel):
+    key: str = Field(min_length=1)
+
+
+class UploadVertexRequest(BaseModel):
+    filename: str = Field(pattern=r'^[\w\-\.]+\.json$')
+    credential: dict
+
+
+class UpdateVertexRequest(BaseModel):
+    credential: dict
+
+
 # --- Helpers ---
 
 def _get_stats_service():
@@ -47,6 +69,75 @@ def _get_stats_service():
     if svc is None:
         raise HTTPException(status_code=503, detail="Stats service not initialized")
     return svc
+
+
+def _mask_key(key: str) -> str:
+    """Mask an API key, showing only the last 4 characters."""
+    return f"...{key[-4:]}" if len(key) >= 4 else "...***"
+
+
+def _atomic_write_json(filepath, data) -> None:
+    """Write JSON to a temp file, then atomically replace the target."""
+    dir_path = os.path.dirname(filepath)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, str(filepath))
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _read_gemini_keys_raw() -> tuple[list[str], bool]:
+    """Read Gemini keys file and return (keys, is_encrypted).
+
+    Mirrors logic from GeminiRotator.load_keys().
+    """
+    filepath = settings.paths.gemini_keys_file
+    if not os.path.exists(filepath):
+        return [], False
+
+    with open(filepath, "r") as f:
+        data = json.load(f)
+
+    if isinstance(data, dict) and "encrypted_keys" in data:
+        encrypted_keys = data["encrypted_keys"]
+        keys = []
+        for ek in encrypted_keys:
+            keys.append(encryption_manager.decrypt_data(ek))
+        return keys, True
+    elif isinstance(data, list):
+        return [k for k in data if isinstance(k, str) and k.strip()], False
+    else:
+        raise ValueError("Unrecognised Gemini keys file format")
+
+
+def _write_gemini_keys(keys: list[str], is_encrypted: bool) -> None:
+    """Write Gemini keys back to disk, re-encrypting if needed."""
+    filepath = settings.paths.gemini_keys_file
+    if is_encrypted:
+        encrypted = [encryption_manager.encrypt_data(k) for k in keys]
+        _atomic_write_json(filepath, {"encrypted_keys": encrypted})
+    else:
+        _atomic_write_json(filepath, keys)
+
+
+def _reload_gemini() -> None:
+    """Reload the Gemini rotator and re-register keys in the rate limiter."""
+    state.gemini_rotator.reload()
+    for key in state.gemini_rotator.keys:
+        state.gemini_rate_limiter.register_key(key)
+
+
+def _reload_vertex() -> None:
+    """Reload the Vertex rotator and re-register credentials in the rate limiter."""
+    state.vertex_rotator.reload()
+    for cred in state.vertex_rotator.credentials:
+        state.vertex_rate_limiter.register_key(cred.project_id)
 
 
 def _build_payload(methods: list[str]) -> tuple[str, dict] | None:
@@ -264,7 +355,7 @@ async def cleanup_stats(
 async def get_providers(current_admin: dict = Depends(get_current_admin)):
     """Get list of available providers and their keys/credentials identifiers."""
     gemini_keys = [
-        {"index": idx, "mask": f"...{k[-4:]}"}
+        {"index": idx, "mask": _mask_key(k)}
         for idx, k in enumerate(state.gemini_rotator.keys)
     ]
     vertex_creds = [
@@ -272,6 +363,150 @@ async def get_providers(current_admin: dict = Depends(get_current_admin)):
         for cred in state.vertex_rotator.credentials
     ]
     return {"gemini": gemini_keys, "vertex": vertex_creds}
+
+
+# --- Gemini Key CRUD ---
+
+@router.get("/keys/gemini")
+async def list_gemini_keys(current_admin: dict = Depends(get_current_admin)):
+    """List all Gemini API keys (masked)."""
+    return [
+        {"index": i, "mask": _mask_key(k)}
+        for i, k in enumerate(state.gemini_rotator.keys)
+    ]
+
+
+@router.post("/keys/gemini", status_code=201)
+async def add_gemini_keys(body: AddGeminiKeysRequest, current_admin: dict = Depends(get_current_admin)):
+    """Add one or more Gemini API keys."""
+    existing_keys, is_encrypted = _read_gemini_keys_raw()
+
+    new_keys = [k.strip() for k in body.keys]
+    if any(not k for k in new_keys):
+        raise HTTPException(status_code=422, detail="Keys must not be empty or whitespace-only")
+
+    existing_set = set(existing_keys)
+    duplicates = [k for k in new_keys if k in existing_set]
+    if duplicates:
+        raise HTTPException(status_code=409, detail=f"{len(duplicates)} duplicate key(s) rejected")
+
+    existing_keys.extend(new_keys)
+    _write_gemini_keys(existing_keys, is_encrypted)
+    _reload_gemini()
+
+    logger.info(f"Admin {current_admin['sub']} added {len(new_keys)} Gemini key(s)")
+    return {"added": len(new_keys), "total": len(existing_keys)}
+
+
+@router.put("/keys/gemini/{index}")
+async def update_gemini_key(index: int, body: UpdateGeminiKeyRequest, current_admin: dict = Depends(get_current_admin)):
+    """Replace a Gemini API key at the given index."""
+    keys, is_encrypted = _read_gemini_keys_raw()
+
+    if index < 0 or index >= len(keys):
+        raise HTTPException(status_code=404, detail=f"Index {index} out of range (0..{len(keys) - 1})")
+
+    new_key = body.key.strip()
+    if not new_key:
+        raise HTTPException(status_code=422, detail="Key must not be empty")
+
+    # Check duplicate against other keys (not the one being replaced)
+    other_keys = keys[:index] + keys[index + 1:]
+    if new_key in other_keys:
+        raise HTTPException(status_code=409, detail="Duplicate key")
+
+    keys[index] = new_key
+    _write_gemini_keys(keys, is_encrypted)
+    _reload_gemini()
+
+    logger.info(f"Admin {current_admin['sub']} updated Gemini key at index {index}")
+    return {"updated": index, "mask": _mask_key(new_key)}
+
+
+@router.delete("/keys/gemini/{index}")
+async def delete_gemini_key(index: int, current_admin: dict = Depends(get_current_admin)):
+    """Remove a Gemini API key at the given index."""
+    keys, is_encrypted = _read_gemini_keys_raw()
+
+    if index < 0 or index >= len(keys):
+        raise HTTPException(status_code=404, detail=f"Index {index} out of range (0..{len(keys) - 1})")
+
+    removed = keys.pop(index)
+    _write_gemini_keys(keys, is_encrypted)
+    _reload_gemini()
+
+    logger.info(f"Admin {current_admin['sub']} deleted Gemini key at index {index}")
+    return {"deleted": index, "remaining": len(keys)}
+
+
+# --- Vertex Credential CRUD ---
+
+@router.get("/keys/vertex")
+async def list_vertex_credentials(current_admin: dict = Depends(get_current_admin)):
+    """List all Vertex service account credentials."""
+    return [
+        {"project_id": cred.project_id, "filename": basename(cred.json_path)}
+        for cred in state.vertex_rotator.credentials
+    ]
+
+
+@router.post("/keys/vertex", status_code=201)
+async def add_vertex_credential(body: UploadVertexRequest, current_admin: dict = Depends(get_current_admin)):
+    """Upload a new Vertex service account JSON."""
+    cred_data = body.credential
+    if "private_key" not in cred_data or "project_id" not in cred_data:
+        raise HTTPException(status_code=422, detail="Credential must contain 'private_key' and 'project_id'")
+
+    project_id = cred_data["project_id"]
+    creds_dir = settings.paths.vertex_creds_dir
+    target_path = os.path.join(str(creds_dir), body.filename)
+
+    # Check filename collision
+    if os.path.exists(target_path):
+        raise HTTPException(status_code=409, detail=f"File '{body.filename}' already exists")
+
+    # Check project_id collision
+    existing_pids = {c.project_id for c in state.vertex_rotator.credentials}
+    if project_id in existing_pids:
+        raise HTTPException(status_code=409, detail=f"Project ID '{project_id}' already loaded")
+
+    _atomic_write_json(target_path, cred_data)
+    _reload_vertex()
+
+    logger.info(f"Admin {current_admin['sub']} added Vertex credential: {body.filename} ({project_id})")
+    return {"added": body.filename, "project_id": project_id}
+
+
+@router.put("/keys/vertex/{project_id}")
+async def update_vertex_credential(project_id: str, body: UpdateVertexRequest, current_admin: dict = Depends(get_current_admin)):
+    """Replace a Vertex service account by project_id."""
+    cred = next((c for c in state.vertex_rotator.credentials if c.project_id == project_id), None)
+    if cred is None:
+        raise HTTPException(status_code=404, detail=f"Project ID '{project_id}' not found")
+
+    cred_data = body.credential
+    if "private_key" not in cred_data or "project_id" not in cred_data:
+        raise HTTPException(status_code=422, detail="Credential must contain 'private_key' and 'project_id'")
+
+    _atomic_write_json(cred.json_path, cred_data)
+    _reload_vertex()
+
+    logger.info(f"Admin {current_admin['sub']} updated Vertex credential: {project_id}")
+    return {"updated": project_id}
+
+
+@router.delete("/keys/vertex/{project_id}")
+async def delete_vertex_credential(project_id: str, current_admin: dict = Depends(get_current_admin)):
+    """Remove a Vertex service account by project_id."""
+    cred = next((c for c in state.vertex_rotator.credentials if c.project_id == project_id), None)
+    if cred is None:
+        raise HTTPException(status_code=404, detail=f"Project ID '{project_id}' not found")
+
+    os.remove(cred.json_path)
+    _reload_vertex()
+
+    logger.info(f"Admin {current_admin['sub']} deleted Vertex credential: {project_id}")
+    return {"deleted": project_id}
 
 
 @router.post("/test-provider")
@@ -319,7 +554,7 @@ async def check_api_keys(
 
     # Gemini
     for key in state.gemini_rotator.keys:
-        key_masked = f"...{key[-4:]}"
+        key_masked = _mask_key(key)
         futures = [_check("gemini", key, m) for m in body.models]
         key_results = await asyncio.gather(*futures)
         results["gemini"][key_masked] = [r for r in key_results if r is not None]
