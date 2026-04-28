@@ -73,6 +73,8 @@ class GeminiRotator:
     def get_next_key(self) -> Optional[str]:
         if not self._keys:
             return None
+        if self._current_index >= len(self._keys):
+            self._current_index = 0
         key = self._keys[self._current_index]
         self._current_index = (self._current_index + 1) % len(self._keys)
         return key
@@ -81,6 +83,8 @@ class GeminiRotator:
         """Return next key that is not disabled, or None if all disabled."""
         if not self._keys:
             return None
+        if self._current_index >= len(self._keys):
+            self._current_index = 0
         total = len(self._keys)
         for _ in range(total):
             key = self._keys[self._current_index]
@@ -91,3 +95,4 @@ class GeminiRotator:
 
     def reload(self):
         self.load_keys()
+        self._current_index = 0

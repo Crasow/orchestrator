@@ -75,6 +75,8 @@ class VertexRotator:
     def get_next_credential(self) -> VertexCredential | None:
         if not self._pool:
             return None
+        if self._current_index >= len(self._pool):
+            self._current_index = 0
         cred = self._pool[self._current_index]
         self._current_index = (self._current_index + 1) % len(self._pool)
         return cred
@@ -83,6 +85,8 @@ class VertexRotator:
         """Return next credential that is not disabled, or None if all disabled."""
         if not self._pool:
             return None
+        if self._current_index >= len(self._pool):
+            self._current_index = 0
         total = len(self._pool)
         for _ in range(total):
             cred = self._pool[self._current_index]
@@ -99,3 +103,4 @@ class VertexRotator:
 
     def reload(self):
         self.load_credentials()
+        self._current_index = 0
