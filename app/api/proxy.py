@@ -359,7 +359,7 @@ async def proxy_gateway(request: Request, path: str):
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Proxy error: {e}")
+            logger.error(f"Proxy error: {e}", exc_info=True)
             final_error = str(e)
             final_key_id = key_id
             await asyncio.sleep(0.5)
