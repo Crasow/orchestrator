@@ -208,6 +208,8 @@ async def proxy_gateway(request: Request, path: str):
     final_status = 503
     final_key_id = "unknown"
     final_error = None
+    final_response_body = None
+    final_response_headers = {}
 
     while attempts < settings.services.max_retries:
         attempts += 1
@@ -325,6 +327,14 @@ async def proxy_gateway(request: Request, path: str):
                 # Non-streaming: read full response
                 resp = await state.http_client.send(req)
 
+                # Save response in case we need to return it on final attempt
+                final_status = resp.status_code
+                final_response_body = resp.content
+                final_response_headers = {
+                    k: v for k, v in resp.headers.items()
+                    if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+                }
+
                 if resp.status_code in [429, 403, 503]:
                     logger.warning(f"Provider Error {resp.status_code}: {resp.content[:200]}")
                     continue
@@ -365,8 +375,30 @@ async def proxy_gateway(request: Request, path: str):
             await asyncio.sleep(0.5)
             continue
 
-    # All retries exhausted
+    # All retries exhausted — return last response from backend or 503
     latency_ms = int((time.time() - start_time) * 1000)
+
+    # If we have a response from the backend, return it (even if it's an error)
+    if final_response_body is not None:
+        bg = BackgroundTask(
+            _record_stats,
+            provider=provider, model=model, key_id=final_key_id,
+            status_code=final_status, latency_ms=latency_ms, action=action,
+            http_method=request.method, url_path=full_path,
+            client_ip=client_ip, user_agent=user_agent,
+            attempt_count=attempts, request_body=body,
+            response_body=final_response_body,
+            is_error=final_status >= 400,
+            error_detail=None,
+        )
+        return Response(
+            content=final_response_body,
+            status_code=final_status,
+            headers=final_response_headers,
+            background=bg,
+        )
+
+    # No response from backend at all
     error_msg = "All backends exhausted or unavailable"
     bg = BackgroundTask(
         _record_stats,

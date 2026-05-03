@@ -23,7 +23,6 @@ logger = logging.getLogger("demo")
 
 # --- МОДЕЛИ ---
 TEXT_MODELS = [
-    "gemini-2.0-flash",
     "gemini-2.5-pro",
 ]
 
